@@ -2,14 +2,19 @@
 .env
 .env.txt
 
-# IDE
+# IDE & Editor
 .idea/
 .vscode/
+.qoder/
+.venv/
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+dist/
+build/
 
 # 数据库
 *.db
@@ -29,8 +34,34 @@ data/app.db
 # 原型文件
 web_redesign_prototype*.html
 
-# 文档
-说明文档.txt.docx
-
 # 模型缓存
 models/
+
+# 测试与调试脚本（不交付）
+check_*.py
+debug_*.py
+test_*.py
+test_*.json
+test_*.jsonl
+convert_*.py
+list_tables.py
+patch_swift.py
+train_model_ps1
+app_streamlit.py
+main_web.py
+
+# 重复/错误目录
+traning/
+
+# 内部文档与笔记（不交付）
+AutoDL*.md
+SFT_DPO_GRPO_*.txt
+System-level*.txt
+sft*.txt
+使用流程.txt
+说明文档.txt
+说明文档.txt.docx
+
+# OS files
+.DS_Store
+Thumbs.db
