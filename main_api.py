@@ -1193,6 +1193,25 @@ async def validate_training_job(
         student_file = request_data.get('student_trajectory_file', trajectory_file)
         teacher_file = request_data.get('teacher_trajectory_file')
         
+        # If no trajectory file, try to find SFT training output files
+        if not student_file and job.output_dir:
+            sft_output_dir = job.output_dir
+            # Also check system_sft subdirectory
+            system_sft_dir = os.path.join(os.path.dirname(sft_output_dir), 'system_sft', os.path.basename(sft_output_dir))
+            search_dirs = [sft_output_dir]
+            if os.path.exists(system_sft_dir):
+                search_dirs.append(system_sft_dir)
+            
+            for search_dir in search_dirs:
+                if os.path.exists(search_dir):
+                    sft_files = sorted(
+                        [f for f in os.listdir(search_dir) if f.endswith('_sft.jsonl')],
+                        reverse=True
+                    )
+                    if sft_files:
+                        student_file = os.path.join(search_dir, sft_files[0])
+                        break
+        
         if not student_file:
             raise HTTPException(
                 status_code=400, 
