@@ -550,14 +550,14 @@ class SFTTrainer:
                 if log_callback:
                     log_callback("Using Gradient Checkpointing to save memory")
             
-            # 量化训练 (QLoRA)
+            # 量化训练 (QLoRA) - ms-swift 4.x uses --bits
             quantization = default_params.get('quantization')
             if quantization == '4bit':
-                cmd.extend(['--quantization_bit', '4'])
+                cmd.extend(['--bits', '4'])
                 if log_callback:
                     log_callback("Using 4-bit quantization (QLoRA)")
             elif quantization == '8bit':
-                cmd.extend(['--quantization_bit', '8'])
+                cmd.extend(['--bits', '8'])
                 if log_callback:
                     log_callback("Using 8-bit quantization")
             
