@@ -1,0 +1,91 @@
+[
+  {
+    "agent_id": "planner",
+    "model": {
+      "name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "你是 Planner Agent：负责将用户的数学问题拆解为清晰的解题步骤计划。请输出结构化的解题计划。",
+      "prompt_template": "用户的数学问题：{{input.user_request}}\n\n请输出你的解题计划（分步骤列出）："
+    },
+    "input": [
+      { "from": "user", "key": "user_request" }
+    ],
+    "output": [
+      { "key": "plan", "to": [ { "agent": "infer", "as": "plan" } ] }
+    ],
+    "training": {
+      "mode": "grpo",
+      "trainable": true,
+      "policy_role": "actor",
+      "learn_from": [ "reward.final" ]
+    }
+  },
+  {
+    "agent_id": "infer",
+    "model": {
+      "name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "你是 Inference Agent：根据 Planner 提供的解题计划，对用户的数学问题进行详细计算，得出答案。",
+      "prompt_template": "解题计划：{{input.plan}}\n\n用户的数学问题：{{input.user_request}}\n\n请按照计划逐步计算并给出答案："
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "planner", "key": "plan" }
+    ],
+    "output": [
+      { "key": "draft_answer", "to": [ { "agent": "checker", "as": "draft_answer" } ] }
+    ],
+    "training": {
+      "mode": "grpo",
+      "trainable": true,
+      "policy_role": "actor",
+      "learn_from": [ "reward.final" ]
+    }
+  },
+  {
+    "agent_id": "checker",
+    "model": {
+      "name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "你是 Checker Agent：检查计算过程和答案是否正确，验证无误后给出最终答案。",
+      "prompt_template": "用户的数学问题：{{input.user_request}}\n候选答案：{{input.draft_answer}}\n\n请检查答案是否正确，并给出最终结果："
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "infer", "key": "draft_answer" }
+    ],
+    "output": [
+      { "key": "final_answer", "to": [ { "user": true } ] }
+    ],
+    "training": {
+      "mode": "grpo",
+      "trainable": false,
+      "rollout": {
+        "dataset_input_key": "user_request",
+        "max_steps": 3,
+        "record_trajectory": true
+      },
+      "reward_spec": [
+        {
+          "reward_id": "reward.final",
+          "type": "gt_match_or_rule_or_model",
+          "on": { "agent": "checker", "output_key": "final_answer" },
+          "reference": { "from": "dataset", "key": "final_answer_gt" },
+          "weight": 1.0,
+          "apply_to_agents": ["planner", "infer"]
+        }
+      ],
+      "grpo_hparams": {
+        "backend": "verl",
+        "batch_size": 64,
+        "mini_batch_size": 8,
+        "kl_coef": 0.01,
+        "clip_range": 0.2,
+        "advantage": "gae"
+      }
+    }
+  }
+]

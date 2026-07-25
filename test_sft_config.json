@@ -1,0 +1,98 @@
+[
+  {
+    "agent_id": "planner",
+    "model": {
+      "name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "你是 Planner Agent：把用户的数学问题拆分成清晰的解题步骤。",
+      "prompt_template": "用户问题：{{input.user_request}}\n请输出详细的解题计划，用步骤1、步骤2...的格式。"
+    },
+    "input": [
+      { "from": "user", "key": "user_request" }
+    ],
+    "output": [
+      { "key": "plan", "to": [ { "agent": "solver", "as": "plan" } ] }
+    ],
+    "training": {
+      "mode": "sft",
+      "trainable": true,
+      "dataset": {
+        "input_key": "user_request"
+      },
+      "ground_truth": {
+        "output_key": "plan",
+        "gt_key": "plan_gt"
+      },
+      "loss": {
+        "type": "ce",
+        "weight": 1.0
+      }
+    }
+  },
+  {
+    "agent_id": "solver",
+    "model": {
+      "name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "你是 Solver Agent：按照计划解决数学问题。",
+      "prompt_template": "解题计划：{{input.plan}}\n用户问题：{{input.user_request}}\n请给出详细解答过程和最终答案。"
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "planner", "key": "plan" }
+    ],
+    "output": [
+      { "key": "solution", "to": [ { "agent": "checker", "as": "solution" } ] }
+    ],
+    "training": {
+      "mode": "sft",
+      "trainable": true,
+      "dataset": {
+        "input_key": "user_request"
+      },
+      "ground_truth": {
+        "output_key": "solution",
+        "gt_key": "solution_gt"
+      },
+      "loss": {
+        "type": "ce",
+        "weight": 1.0
+      }
+    }
+  },
+  {
+    "agent_id": "checker",
+    "model": {
+      "name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "你是 Checker Agent：检查解答是否正确，给出最终答案。",
+      "prompt_template": "用户问题：{{input.user_request}}\n解答过程：{{input.solution}}\n请检查解答是否正确，输出最终答案。"
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "solver", "key": "solution" }
+    ],
+    "output": [
+      { "key": "final_answer", "to": [ { "user": true } ] },
+      { "key": "is_correct", "to": [ { "user": true } ] }
+    ],
+    "training": {
+      "mode": "sft",
+      "trainable": true,
+      "dataset": {
+        "input_key": "user_request"
+      },
+      "ground_truth": {
+        "output_key": "final_answer",
+        "gt_key": "final_answer_gt"
+      },
+      "loss": {
+        "type": "ce",
+        "weight": 1.0
+      }
+    }
+  }
+]

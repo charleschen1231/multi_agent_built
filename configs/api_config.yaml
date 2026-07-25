@@ -1,0 +1,9 @@
+qwen:
+  api_key: "YOUR_QWEN_API_KEY_HERE"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1" # 兼容 OpenAI 格式
+  model: "qwen-plus" # 或者 qwen-turbo, qwen-max
+
+openai:
+  api_key: "YOUR_OPENAI_API_KEY_HERE"
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"

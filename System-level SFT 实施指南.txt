@@ -1,0 +1,156 @@
+Multi-Agent System Builder: System-level SFT 实施指南
+
+核心概念
+本阶段的目的是利用 GPT-4o 作为“教师模型”生成高质量的中间推理数据（Ground Truth），构建训练数据集，进而对由 Qwen2.5-32B 组成的多智能体系统进行联合或分步监督微调（SFT）。
+
+输入：用户提供的原始问题集（user_request）。
+教师 (Teacher)：GPT-4o（负责生成完美的 Plan、Draft Answer、Final Answer 作为标准答案）。
+学生 (Student)：Qwen2.5-32B（系统中的 Planner, Infer, Checker 等 Agent）。
+目标：让 Qwen2.5 系统学会模仿 GPT-4o 的推理逻辑、数据流转格式及最终输出质量。
+
+准备工作：数据与配置
+
+2.1 准备原始问题集
+用户只需准备一个包含原始问题的列表（JSONL 格式），无需提供任何中间步骤的答案。
+// dataset_raw.jsonl
+{"id": "001", "user_request": "帮我规划一个去日本的7天行程，预算2万元。"}
+{"id": "002", "user_request": "分析这份财报，找出营收下降的主要原因。"}
+...
+
+2.2 编写系统规格文件 (System Spec JSON)
+创建一个 JSON 文件，定义系统架构、数据流及 SFT 训练配置。
+
+关键配置点：
+training.mode: 必须设为 "sft"。
+training.trainable: 设为 true 以启用梯度更新。
+training.ground_truth: 定义该 Agent 的输出对应数据集中的哪个 GT 字段（此时字段可能为空，由系统自动填充）。
+training.loss.weight: 定义不同 Agent 在总 Loss 中的权重（例如 Planner 占 0.3，Infer 占 1.0）。
+
+完整 JSON 示例 (system_spec_sft.json)：
+[
+  {
+    "agent_id": "planner",
+    "model": { "name_or_path": "Qwen2.5-32B-Instruct" },
+    "instruction_prompt": {
+      "instruction": "你是 Planner Agent：把用户需求拆成可执行的步骤计划。",
+      "prompt_template": "用户需求：{{input.user_request}}n请输出 JSON 格式的 plan。"
+    },
+    "input": [ { "from": "user", "key": "user_request" } ],
+    "output": [ { "key": "plan", "to": [ { "agent": "infer", "as": "plan" } ] } ],
+    "training": {
+      "mode": "sft",
+      "trainable": true,
+      "dataset": { "input_key": "user_request" },
+      "ground_truth": { "output_key": "plan", "gt_key": "plan_gt" },
+      "loss": { "type": "ce", "weight": 0.3 },
+      "train_parameters": { "lr": 1e-5, "batch_size": 8, "epochs": 3 }
+    }
+  },
+  {
+    "agent_id": "infer",
+    "model": { "name_or_path": "Qwen2.5-32B-Instruct" },
+    "instruction_prompt": {
+      "instruction": "你是 Inference Agent：按照 plan 解决问题并生成答案。",
+      "prompt_template": "Plan：{{input.plan}}n问题：{{input.user_request}}n请给出答案："
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "planner", "key": "plan" }
+    ],
+    "output": [ { "key": "draft_answer", "to": [ { "agent": "checker", "as": "draft_answer" } ] } ],
+    "training": {
+      "mode": "sft",
+      "trainable": true,
+      "dataset": { "input_key": "user_request" },
+      "ground_truth": { "output_key": "draft_answer", "gt_key": "draft_answer_gt" },
+      "loss": { "type": "ce", "weight": 1.0 },
+      "train_parameters": { "lr": 1e-5, "batch_size": 8, "epochs": 3 }
+    }
+  },
+  {
+    "agent_id": "checker",
+    "model": { "name_or_path": "Qwen2.5-32B-Instruct" },
+    "instruction_prompt": {
+      "instruction": "你是 Checker Agent：检查答案是否正确、是否满足格式要求，并给出最终输出。",
+      "prompt_template": "问题：{{input.user_request}}n候选答案：{{input.draft_answer}}n请输出：{verdict, feedback, final_answer}"
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "infer", "key": "draft_answer" }
+    ],
+    "output": [
+      { "key": "final_answer", "to": [ { "user": true } ] },
+      { "key": "verdict", "to": [ { "user": true } ] },
+      { "key": "feedback", "to": [ { "user": true } ] }
+    ],
+    "training": {
+      "mode": "sft",
+      "trainable": true,
+      "dataset": { "input_key": "user_request" },
+      "ground_truth": { "output_key": "final_answer", "gt_key": "final_answer_gt" },
+      "loss": { "type": "ce", "weight": 1.0 },
+      "train_parameters": { "lr": 1e-5, "batch_size": 8, "epochs": 3 }
+    }
+  }
+]
+
+执行流程详解
+
+Package 将自动执行以下四个步骤，用户无需编写任何 Python 代码。
+
+步骤 1: Prompt 优化 (可选但推荐)
+动作：Package 调用 GPT-4o API。
+内容：将用户在 JSON 中定义的 instruction_prompt 发送给 GPT-4o，请求其优化为更适合多智能体协作、格式更严谨的版本。
+结果：JSON 中的 Prompt 模板被原地更新为优化后的版本。
+
+步骤 2: 轨迹生成与 Ground Truth 构建 (Data Generation)
+这是 SFT 的核心数据准备阶段。
+动作：Package 遍历 dataset_raw.jsonl 中的每一条 user_request。
+执行者：调用 GPT-4o 模拟整个系统运行。
+    Planner 阶段：GPT-4o 接收 user_request，生成完美的 plan_gt。
+    Infer 阶段：GPT-4o 接收 user_request + plan_gt，生成完美的 draft_answer_gt。
+    Checker 阶段：GPT-4o 接收 user_request + draft_answer_gt，生成完美的 final_answer_gt, verdict_gt, feedback_gt。
+数据集组装：将上述过程产生的所有中间产物合并，生成完整的 SFT 训练集 dataset_sft.jsonl。
+   结构示例：
+                {
+          "user_request": "...",
+          "plan_gt": "[{"step": 1, "action": "..."}]",
+          "draft_answer_gt": "根据计划，答案是...",
+          "final_answer_gt": "{...}"
+        }
+
+
+步骤 3: System-level SFT 训练
+动作：加载 Qwen2.5-32B 模型实例，启动训练循环。
+前向传播 (Forward)：
+    输入 user_request。
+    数据流经 Planner (Qwen) -> 输出 pred_plan。
+    pred_plan 流入 Infer (Qwen) -> 输出 pred_answer。
+    pred_answer 流入 Checker (Qwen) -> 输出 pred_final。
+损失计算 (Loss Calculation)：
+    Planner Loss: 计算 pred_plan 与 plan_gt 的交叉熵 (CE)，乘以权重 0.3。
+    Infer Loss: 计算 pred_answer 与 draft_answer_gt 的 CE，乘以权重 1.0。
+    Checker Loss: 计算 pred_final 与 final_answer_gt 的 CE，乘以权重 1.0。
+    Total Loss = Sum(Agent Losses)。
+反向传播 (Backward)：
+    根据 Total Loss 更新所有标记为 trainable: true 的 Agent 参数。
+   注：支持批量处理 (Batch Processing)，提高训练效率。
+
+步骤 4: 模型保存与验证
+保存：训练结束后，自动保存微调后的模型权重（可以是全量权重或 LoRA 适配器）。
+验证：使用保留的测试集运行一次推理，对比 Qwen 系统的输出与 GPT-4o 的 GT，评估拟合程度。
+
+关键规则与约束
+
+GT 依赖性：在 SFT 模式下，必须为每个 trainable: true 的 Agent 提供对应的 Ground Truth。如果数据集中缺少某个 Agent 的 GT（例如只有 final_answer_gt 而没有 plan_gt），则该 Agent 无法进行 SFT 训练（需设为 trainable: false 或切换到 GRPO 模式）。
+数据流一致性：训练时的输入数据流必须严格遵循 JSON 中定义的 input/output 路径。GPT-4o 生成数据时也是严格遵循此路径，确保“老师”和“学生”看到的上下文一致。
+多任务加权：通过 loss.weight 参数，用户可以控制系统更关注哪个环节。例如，如果主要错误发生在计划阶段，可调高 Planner 的 weight。
+无胶水代码：整个过程（数据生成、格式化、 DataLoader 构建、Training Loop、Loss 聚合）完全由 Package 内部根据 JSON 自动处理。
+
+输出产物
+执行完成后，用户将获得：
+微调后的模型权重：可用于部署高性能的多智能体系统。
+合成训练数据集 (dataset_sft.jsonl)：包含 GPT-4o 生成的思维链数据，可用于后续其他实验。
+训练日志：包含各 Agent 的 Loss 下降曲线，用于分析哪个环节最难训练。
+
+通过此流程，用户仅需提供问题和 JSON 配置，即可实现“GPT-4o 蒸馏 -> Qwen2.5 系统级进化”的完整闭环。

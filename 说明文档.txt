@@ -1,0 +1,369 @@
+Multi-Agent System Builder Package 说明文档（面向使用者）
+1. 这个 package 是干什么的？
+本 package 的定位是：Multi-Agent System 的“搭建器 + 训练器”。
+用户不需要自己写多智能体编排代码，不需要写 plan/infer/check 的 glue code。
+用户只需要提供：
+1.一个 JSON 文件：用来完整描述要搭建的 multi-agent system
+2.模型权重 / 训练数据：用于推理或 system-level 训练（SFT / GRPO）
+package 会根据 JSON 自动构建 system，并支持：
+Inference（直接运行这个 multi-agent system）
+SFT（在整个 multi-agent system 级别做监督训练，trl）
+GRPO，DPO （user必须给输入输出）
+GRPO（在整个 multi-agent system 级别做强化学习训练，verl）
+关键点：JSON 不是“参数配置”，而是系统定义文件（System Spec）。
+用户写 JSON = 用户在“画系统图 + 定义数据流 + 定义 prompt + 定义每个 agent 的职责”。
+这里你的package是基于gpt4o API来实现
+
+2. JSON 文件描述什么？
+一个 JSON 文件需要把下面几件事讲清楚：
+2.1 系统由哪些 Agent 组成
+例如：Planner / Retriever / Generator / Critic / ToolAgent / MemoryAgent …
+每个 agent 的职责是什么（做什么任务）
+2.2 每个 Agent 的 Instruction / Prompt 模板是什么
+system prompt、role prompt、模板变量
+允许从上游输出/全局状态注入变量（比如把 plan 或 evidence 填进去）
+2.3 数据流怎么走：每个 agent 的 输入来自哪里、输出写到哪里
+上游输出如何成为下游输入
+全局状态（state）哪些字段会被读写
+是否有分支/循环/条件跳转
+2.4 训练时怎么定义“system-level 的学习目标”
+SFT：监督信号在哪里（监督哪个 agent 的输出、用哪个 target）
+GRPO：reward 如何定义（基于最终答案？基于多步轨迹？每个 step 的 reward 还是最终 reward？但是这里过于宽泛，所以我们给出限定边界，只能根据每个agent的输出来定义reward，也就是我们需要保存每个agent的输出和输入，然后user可以定义llm或者自己的规则去计算reward值，从而训练每个agent。也就是这里就实现两种训练方式，一种是user自己定义一个agent的输出和ground truth计算advantage，一种是每个agent的输出都计算advantage，可以用llm评估或者user自己提供ground truth评估）
+rollout 轨迹怎么记录（把整个 system 的多步交互当作 trajectory）
+
+3. 核心设计：System Spec（系统规格） + Dataflow（数据流规范）
+3.1 系统运行时的统一数据容器：state
+系统执行过程中有一个全局 state，用来承载所有跨 agent 流动的数据。
+JSON 的数据流本质就是在规定：
+某个 agent 从 state 读取哪些字段作为输入
+某个 agent 把输出写回 state 的哪些字段
+下一个 agent 再从 state 取走需要的数据
+这里需要支持批量处理。
+
+4. JSON 结构（建议标准）
+首先是一个list，这个list的每个元素是针对一个agent，每个agent需要包含几个key：instruction prompt，输入，输出，模型名字或者目录。输入指的是，他的输入是来自原始输入还是其他的哪个或者哪些agent，输出同理时直接输出答案还是输出到哪个或者哪些agent，user需要定义清楚。如果是训练阶段，那么user除了上述的需要定义，还有就是需要定义训练时候的user自己的输入以及ground truth，也就是每个agent的输出需要ground truth，当然也可以不给每个agent的ground truth就给最后的output的ground truth，但是只能用于grpo不能sft，sft必须给出每个agent的ground truth。
+
+5. 一个贴近你描述的例子：plan -> inference -> check（只靠 JSON 搭建）
+下面这个例子展示：用户只写 JSON，package 就能构建 system 并运行。
+[
+  {
+    "agent_id": "planner",
+    "model": {
+      "name_or_path": "Qwen2.5-32B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "你是 Planner Agent：把用户需求拆成可执行的步骤计划。",
+      "prompt_template": "用户需求：{{input.user_request}}\n请输出 JSON 格式的 plan。"
+    },
+    "input": [
+      { "from": "user", "key": "user_request" }
+    ],
+    "output": [
+      { "key": "plan", "to": [ { "agent": "infer", "as": "plan" } ] }
+    ]
+  },
+
+  {
+    "agent_id": "infer",
+    "model": {
+      "name_or_path": "Qwen2.5-32B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "你是 Inference Agent：按照 plan 解决问题并生成答案。",
+      "prompt_template": "Plan：{{input.plan}}\n问题：{{input.user_request}}\n请给出答案："
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "planner", "key": "plan" }
+    ],
+    "output": [
+      { "key": "draft_answer", "to": [ { "agent": "checker", "as": "draft_answer" } ] }
+    ]
+  },
+
+  {
+    "agent_id": "checker",
+    "model": {
+      "name_or_path": "Qwen2.5-32B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "你是 Checker Agent：检查答案是否正确、是否满足格式要求，并给出最终输出。",
+      "prompt_template": "问题：{{input.user_request}}\n候选答案：{{input.draft_answer}}\n请输出：{verdict, feedback, final_answer}"
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "infer", "key": "draft_answer" }
+    ],
+    "output": [
+      { "key": "final_answer", "to": [ { "user": true } ] },
+      { "key": "verdict", "to": [ { "user": true } ] },
+      { "key": "feedback", "to": [ { "user": true } ] }
+    ]
+  }
+] “每个 agent 输入输出是什么”都在 dataflow 里写死了。
+planner 输出写到 state.plan
+infer 读取 state.plan 并输出到 state.answer
+checker 读取 state.answer 并输出 state.check
+
+用户不写任何 Python glue code。但是可以发现，用户给的prompt肯定不一定就适合inference等task，所以可以给出选项是不是要gpt4o优化，优化成适合system的prompt，也可以选择不优化。所以这个系统必须基于gpt4o
+
+
+6.不仅能推理，还能在 system level 做 SFT / GRPO
+6.1 System-level SFT（不是单个模型 prompt 的 SFT）
+含义：把整个 multi-agent 运行过程看作一个系统，训练目标可以是：
+只监督某些 agent 的输出（例如只监督 infer 的 answer）
+或监督多步（例如 planner 的 plan + infer 的 answer 都有 target）
+数据集提供的是“系统输入 + 期望的系统中间产物/最终产物”
+在 JSON 里指定：
+监督哪些 node（哪些 agent 的哪些输出字段）
+target 从数据集的哪个字段来
+6.2 System-level GRPO（把整个 system 当 policy）
+含义：一次 rollout 是多步、多 agent 的 trajectory：
+state0 -> planner -> state1 -> infer -> state2 -> checker -> state3 ...
+reward 可以定义在最终输出（final answer），也可以按 step 分解（plan quality、format reward、accuracy reward，同时也可以针对不同的agent，这里用户可以定义哪些agent是需要训练，然后用什么reward训练，可以用final reward训练，也可以用llm去评判每个agent的输出从而计算reward，这里要结合verl包去实现，尽量调用verl的训练方法）
+在 JSON 里指定：
+rollout 的入口输入字段（dataset 的 question / context）
+哪些 agent 是“可训练 policy”（例如 planner+infer）
+reward_fn 如何从 trajectory/state 计算
+GRPO 超参（batch、kl、clip、advantage 等）
+
+8. JSON 需要表达的“训练配置”示例（概念结构）
+这里我给的是“你想表达的结构”，字段名可以按你实现定，但文档要把含义说清楚。
+8.1 SFT 配置（system level）
+[
+  {
+    "agent_id": "planner",
+    "model": { "name_or_path": "Qwen2.5-32B-Instruct" },
+    "instruction_prompt": {
+      "instruction": "Planner：生成计划。",
+      "prompt_template": "用户需求：{{input.user_request}}\n输出 JSON plan："
+    },
+    "input": [
+      { "from": "user", "key": "user_request" }
+    ],
+    "output": [
+      { "key": "plan", "to": [ { "agent": "infer", "as": "plan" } ] }
+    ],
+
+    "training": {
+      "mode": "sft",
+      "trainable": true,
+      "dataset": {
+        "input_key": "user_request"
+      },
+      "ground_truth": {
+        "output_key": "plan",
+        "gt_key": "plan_gt"
+      },
+      "loss": {
+        "type": "ce",
+        "weight": 0.3
+      }
+	  “train parameters”:
+			{
+				“lr”: 
+				“batch_size”: 
+				。。。
+		}
+    }
+  },
+
+  {
+    "agent_id": "infer",
+    "model": { "name_or_path": "Qwen2.5-32B-Instruct" },
+    "instruction_prompt": {
+      "instruction": "Infer：根据计划生成答案。",
+      "prompt_template": "Plan：{{input.plan}}\n问题：{{input.user_request}}\n答案："
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "planner", "key": "plan" }
+    ],
+    "output": [
+      { "key": "draft_answer", "to": [ { "agent": "checker", "as": "draft_answer" } ] }
+    ],
+
+    "training": {
+      "mode": "sft",
+      "trainable": true,
+      "dataset": {
+        "input_key": "user_request"
+      },
+      "ground_truth": {
+        "output_key": "draft_answer",
+        "gt_key": "draft_answer_gt"
+      },
+      "loss": {
+        "type": "ce",
+        "weight": 1.0
+      }
+“train parameters”:
+			{
+				“lr”: 
+				“batch_size”: 
+				。。。
+		}
+
+    }
+  },
+
+  {
+    "agent_id": "checker",
+    "model": { "name_or_path": "Qwen2.5-32B-Instruct" },
+    "instruction_prompt": {
+      "instruction": "Checker：给出判定与最终答案。",
+      "prompt_template": "问题：{{input.user_request}}\n候选答案：{{input.draft_answer}}\n输出：{verdict, feedback, final_answer}"
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "infer", "key": "draft_answer" }
+    ],
+    "output": [
+      { "key": "final_answer", "to": [ { "user": true } ] },
+      { "key": "verdict", "to": [ { "user": true } ] },
+      { "key": "feedback", "to": [ { "user": true } ] }
+    ],
+
+    "training": {
+      "mode": "sft",
+      "trainable": true,
+      "dataset": {
+        "input_key": "user_request"
+      },
+      "ground_truth": {
+        "output_key": "final_answer",
+        "gt_key": "final_answer_gt"
+      },
+      "loss": {
+        "type": "ce",
+        "weight": 1.0
+      }
+    }
+  }
+]
+
+GRPO的设置：
+[
+  {
+    "agent_id": "planner",
+    "model": { "name_or_path": "Qwen2.5-32B-Instruct" },
+    "instruction_prompt": {
+      "instruction": "Planner：生成计划。",
+      "prompt_template": "用户需求：{{input.user_request}}\n输出 JSON plan："
+    },
+    "input": [
+      { "from": "user", "key": "user_request" }
+    ],
+    "output": [
+      { "key": "plan", "to": [ { "agent": "infer", "as": "plan" } ] }
+    ],
+
+    "training": {
+      "mode": "grpo",
+      "trainable": true,
+      "policy_role": "actor",
+      "learn_from": [ "reward.final" ]
+    }
+  },
+
+  {
+    "agent_id": "infer",
+    "model": { "name_or_path": "Qwen2.5-32B-Instruct" },
+    "instruction_prompt": {
+      "instruction": "Infer：根据计划生成答案。",
+      "prompt_template": "Plan：{{input.plan}}\n问题：{{input.user_request}}\n答案："
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "planner", "key": "plan" }
+    ],
+    "output": [
+      { "key": "draft_answer", "to": [ { "agent": "checker", "as": "draft_answer" } ] }
+    ],
+
+    "training": {
+      "mode": "grpo",
+      "trainable": true,
+      "policy_role": "actor",
+      "learn_from": [ "reward.final" ]
+    }
+  },
+
+  {
+    "agent_id": "checker",
+    "model": { "name_or_path": "Qwen2.5-32B-Instruct" },
+    "instruction_prompt": {
+      "instruction": "Checker：输出最终答案（也可只做格式修正）。",
+      "prompt_template": "问题：{{input.user_request}}\n候选答案：{{input.draft_answer}}\n输出 final_answer："
+    },
+    "input": [
+      { "from": "user", "key": "user_request" },
+      { "from": "infer", "key": "draft_answer" }
+    ],
+    "output": [
+      { "key": "final_answer", "to": [ { "user": true } ] }
+    ],
+
+    "training": {
+      "mode": "grpo",
+      "trainable": false,
+
+      "rollout": {
+        "dataset_input_key": "user_request",
+        "max_steps": 3,
+        "record_trajectory": true
+      },
+
+      "reward_spec": [
+        {
+          "reward_id": "reward.final",
+          "type": "gt_match_or_rule_or_model",
+          "on": { "agent": "checker", "output_key": "final_answer" },
+          "reference": { "from": "dataset", "key": "final_answer_gt" },
+          "weight": 1.0,
+
+          "apply_to_agents": ["planner", "infer"]
+        }
+      ],
+
+      "grpo_hparams": {
+        "backend": "verl",
+        "batch_size": 64,
+        "mini_batch_size": 8,
+        "kl_coef": 0.01,
+        "clip_range": 0.2,
+        "advantage": "gae"
+      }
+    }
+  }
+]
+
+更复杂的就是每个agent有自己的reward，type可以是llm_judge也可以是用户自己定义，如果是用户自己定义，那么得给出相应的ground truth或者rule：
+"reward_spec": [
+  {
+    "reward_id": "reward.plan_quality",
+    "type": "llm_judge",
+    "on": { "agent": "planner", "output_key": "plan" },
+    "judge_model": { "name_or_path": "gpt-4o-mini" },
+    "weight": 0.3,
+    "apply_to_agents": ["planner"]
+  },
+  {
+    "reward_id": "reward.format",
+    "type": "rule",
+    "on": { "agent": "infer", "output_key": "draft_answer" },
+    "rule": "must_follow_format_v1(description)",
+    "weight": 0.2,
+    "apply_to_agents": ["infer"]
+  },
+  {
+    "reward_id": "reward.final",
+    "type": "gt_match_or_model",
+    "on": { "agent": "checker", "output_key": "final_answer" },
+    "reference": { "from": "dataset", "key": "final_answer_gt" },
+    "weight": 1.0,
+    "apply_to_agents": ["planner", "infer"]
+  }
+]
+
+

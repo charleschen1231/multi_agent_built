@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Agent System Builder</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        // Initialize Mermaid
+        mermaid.initialize({ 
+            startOnLoad: false,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+        
+        // Check authentication immediately
+        (function() {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                window.location.href = '/';
+                return;
+            }
+            // Verify token is valid
+            fetch('/api/auth/me', {
+                headers: { 'Authorization': 'Bearer ' + token }
+            }).then(response => {
+                if (!response.ok) {
+                    localStorage.removeItem('access_token');
+                    window.location.href = '/';
+                }
+            }).catch(() => {
+                localStorage.removeItem('access_token');
+                window.location.href = '/';
+            });
+        })();
+    </script>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">🤖</div>
+            <span>Multi-Agent System Builder</span>
+        </div>
+        <nav class="nav-menu">
+            <div class="nav-item active" data-page="dashboard" onclick="switchPage('dashboard')">
+                <span>📊</span> 仪表盘
+            </div>
+            <div class="nav-item" data-page="builder" onclick="switchPage('builder')">
+                <span>🔧</span> 系统构建器
+            </div>
+            <div class="nav-item" data-page="data" onclick="switchPage('data')">
+                <span>📁</span> 数据资产
+            </div>
+            <div class="nav-item" data-page="execution" onclick="switchPage('execution')">
+                <span>▶️</span> 执行中心
+            </div>
+            <div class="nav-item" data-page="trajectory" onclick="switchPage('trajectory')">
+                <span>📊</span> 轨迹追溯
+            </div>
+            <div class="nav-item" data-page="training" onclick="switchPage('training')">
+                <span>🎓</span> 训练工厂
+            </div>
+        </nav>
+        <div class="user-menu">
+            <div class="user-info">
+                <span>👤</span>
+                <span id="username">Admin</span>
+            </div>
+            <button class="logout-btn" onclick="logout()">退出</button>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="main-container">
+        
+        <!-- Dashboard Page -->
+        <div id="page-dashboard" class="page-content active">
+            <div class="page-header">
+                <div class="page-title-group">
+                    <div class="page-icon">📊</div>
+                    <div>
+                        <h1 class="page-title">系统概览</h1>
+                        <p class="page-subtitle">Multi-Agent System Builder 仪表盘</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Stats Cards -->
+            <div class="four-col" style="margin-bottom: 24px;">
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #1890ff;" id="stat-configs">0</div>
+                    <div class="stat-label">系统配置</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #52c41a;" id="stat-valid-configs">0</div>
+                    <div class="stat-label">有效配置</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #722ed1;" id="stat-datasets">0</div>
+                    <div class="stat-label">数据集</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #fa8c16;" id="stat-trajectories">0</div>
+                    <div class="stat-label">执行轨迹</div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <h2 style="margin-bottom: 20px; font-size: 18px;">🚀 快捷操作</h2>
+            <div class="four-col" style="margin-bottom: 24px;">
+                <div class="card" style="cursor: pointer;" onclick="switchPage('builder')">
+                    <div class="card-body" style="text-align: center;">
+                        <div style="font-size: 48px; margin-bottom: 16px;">🔧</div>
+                        <div style="font-weight: 600; margin-bottom: 8px;">系统构建器</div>
+                        <div style="font-size: 13px; color: #8c8c8c;">上传 JSON 配置，自动生成数据流</div>
+                    </div>
+                </div>
+                <div class="card" style="cursor: pointer;" onclick="switchPage('data')">
+                    <div class="card-body" style="text-align: center;">
+                        <div style="font-size: 48px; margin-bottom: 16px;">📁</div>
+                        <div style="font-weight: 600; margin-bottom: 8px;">数据资产</div>
+                        <div style="font-size: 13px; color: #8c8c8c;">管理数据集和训练数据</div>
+                    </div>
+                </div>
+                <div class="card" style="cursor: pointer;" onclick="switchPage('execution')">
+                    <div class="card-body" style="text-align: center;">
+                        <div style="font-size: 48px; margin-bottom: 16px;">▶️</div>
+                        <div style="font-weight: 600; margin-bottom: 8px;">执行中心</div>
+                        <div style="font-size: 13px; color: #8c8c8c;">批量推理与实时监控</div>
+                    </div>
+                </div>
+                <div class="card" style="cursor: pointer;" onclick="switchPage('training')">
+                    <div class="card-body" style="text-align: center;">
+                        <div style="font-size: 48px; margin-bottom: 16px;">🎓</div>
+                        <div style="font-weight: 600; margin-bottom: 8px;">训练工厂</div>
+                        <div style="font-size: 13px; color: #8c8c8c;">SFT / GRPO / DPO 训练</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Activity -->
+            <h2 style="margin-bottom: 20px; font-size: 18px;">📋 最近活动</h2>
+            <div class="three-col">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">最近的配置</span>
+                    </div>
+                    <div class="card-body" id="recent-configs">
+                        <p style="color: #8c8c8c;">加载中...</p>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">最近的执行</span>
+                    </div>
+                    <div class="card-body" id="recent-executions">
+                        <p style="color: #8c8c8c;">加载中...</p>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">最近的训练</span>
+                    </div>
+                    <div class="card-body" id="recent-trainings">
+                        <p style="color: #8c8c8c;">加载中...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Builder Page -->
+        <div id="page-builder" class="page-content">
+            <div class="page-header">
+                <div class="page-title-group">
+                    <div class="page-icon">🔧</div>
+                    <div>
+                        <h1 class="page-title">系统构建器</h1>
+                        <p class="page-subtitle">JSON定义 → 自动解析 → 可视化生成</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- JSON Editor Section -->
+            <div class="card" style="margin-bottom: 20px;">
+                <div class="tabs">
+                    <div class="tab active" onclick="switchBuilderTab('json', this)">System Spec (JSON)</div>
+                    <div class="tab" onclick="switchBuilderTab('branch', this)">分支/循环配置</div>
+                </div>
+                
+                <div id="builder-json" class="tab-content active" style="padding: 20px;">
+                    <!-- Row 1: Config Selection and Name -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 16px;">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label class="form-label">📂 加载已有配置</label>
+                            <select class="form-select" id="builder-config-select" onchange="loadBuilderConfig(this.value)">
+                                <option value="">-- 选择已保存的配置 --</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label class="form-label">🏷️ 配置名称</label>
+                            <input type="text" class="form-input" id="config-name" placeholder="输入配置名称（如：数学解题系统）">
+                        </div>
+                    </div>
+                    
+                    <!-- Row 2: JSON Input -->
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label class="form-label">📝 System Spec (JSON)</label>
+                        <textarea class="form-textarea" id="config-json" rows="12" placeholder="粘贴 JSON 配置...&#10;&#10;示例格式：&#10;[&#10;  {&#10;    &quot;agent_id&quot;: &quot;agent1&quot;,&#10;    &quot;model&quot;: {...},&#10;    &quot;input&quot;: [...],&#10;    &quot;output&quot;: [...]&#10;  }&#10;]"></textarea>
+                    </div>
+                    
+                    <!-- Row 3: Action Buttons -->
+                    <div style="display: flex; gap: 12px; justify-content: space-between; align-items: center;">
+                        <div style="display: flex; gap: 8px;">
+                            <select class="form-select" style="width: auto; min-width: 150px;" onchange="if(this.value) window[this.value]()">
+                                <option value="">📚 加载示例...</option>
+                                <option value="loadExampleConfig">基础 Plan-Infer-Check</option>
+                                <option value="loadBranchLoopExample">简单循环迭代</option>
+                                <option value="loadComplexBranchExample">分支+循环复杂系统</option>
+                            </select>
+                            <button class="btn btn-warning" onclick="optimizePrompts()">✨ 优化Prompt</button>
+                            <button class="btn btn-secondary" onclick="showModelPicker()">🤖 模型选择助手</button>
+                        </div>
+                        <div style="display: flex; gap: 12px;">
+                            <button class="btn btn-primary" onclick="validateConfig()">🔍 解析并生成</button>
+                            <button class="btn btn-success" onclick="saveConfig()">💾 保存配置</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Row 4: Execution Controls -->
+                    <div style="display: flex; gap: 12px; justify-content: flex-start; margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5e7eb;">
+                        <button class="btn btn-secondary" onclick="executeConfig()">▶️ 单条执行</button>
+                        <button class="btn btn-secondary" onclick="showBatchModal()">📦 批量执行</button>
+                        <input type="text" id="test-input" class="form-input" style="flex: 1;" placeholder="测试输入（如：请帮我规划一次日本旅行）">
+                    </div>
+                    
+                    <!-- Validation Result -->
+                    <div style="margin-top: 16px;">
+                        <div id="validation-result">
+                            <div class="alert alert-info">
+                                <span>ℹ️</span>
+                                <div>点击"解析并生成"校验 JSON 配置并生成数据流图</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="builder-branch" class="tab-content">
+                    <div style="padding: 20px;">
+                        <div class="alert alert-success" style="margin-bottom: 20px;">
+                            <span>✅</span>
+                            <div>分支/循环功能已启用！请在 JSON 中配置 <code>type: "branch"</code> 或 <code>type: "loop_controller"</code></div>
+                        </div>
+                        
+                        <h4 style="margin-bottom: 16px;">分支配置示例</h4>
+                        <pre style="background: #f5f5f5; padding: 16px; border-radius: 8px; overflow: auto; font-size: 13px; margin-bottom: 20px;">{
+  "agent_id": "router",
+  "type": "branch",
+  "input": [...],
+  "branches": {
+    "conditions": [
+      {
+        "condition": "{{input.score}} >= 8",
+        "target": "high_quality_handler",
+        "output_mapping": {...}
+      },
+      {
+        "condition": "{{input.score}} >= 5",
+        "target": "medium_quality_handler"
+      }
+    ],
+    "default": "low_quality_handler"
+  }
+}</pre>
+                        
+                        <h4 style="margin-bottom: 16px;">循环配置示例</h4>
+                        <pre style="background: #f5f5f5; padding: 16px; border-radius: 8px; overflow: auto; font-size: 13px; margin-bottom: 20px;">{
+  "agent_id": "refiner",
+  "type": "loop_controller",
+  "input": [...],
+  "loop": {
+    "max_iterations": 3,
+    "condition": "{{input.quality}} < 8 && {{input.iteration}} < 3",
+    "on_continue": {
+      "output": {"iteration": "{{input.iteration}} + 1"},
+      "next": "generator"
+    },
+    "on_exit": {
+      "output": {"final_result": "{{input.result}}"},
+      "next": "output_finalizer"
+    }
+  }
+}</pre>
+                        
+                        <div class="alert alert-info">
+                            <span>ℹ️</span>
+                            <div>支持的条件表达式：<code>{{input.xxx}} > 5</code>, <code>{{input.flag}} == true</code>, <code>&&</code>, <code>||</code></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Visualization Section (Large) -->
+            <div class="card" style="min-height: 500px;">
+                <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="card-title">📊 数据流可视化</span>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="zoomViz(0.8)">🔍- 缩小</button>
+                        <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="zoomViz(1.25)">🔍+ 放大</button>
+                        <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="resetVizZoom()">⟲ 重置</button>
+                        <button class="btn btn-primary" style="padding: 6px 16px; font-size: 12px; font-weight: 600;" onclick="toggleFullscreenViz()">⛶ 全屏查看</button>
+                    </div>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div id="dataflow-viz-container" style="width: 100%; min-height: 450px; overflow: auto; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);">
+                        <div id="dataflow-viz" style="transform-origin: top left; transition: transform 0.2s; padding: 40px;">
+                            <div style="text-align: center; color: #8c8c8c; padding: 80px;">
+                                <div style="font-size: 64px; margin-bottom: 24px;">📊</div>
+                                <div style="font-size: 18px;">点击上方"🔍 解析并生成"查看数据流图</div>
+                                <div style="font-size: 14px; margin-top: 12px; color: #aaa;">支持缩放、全屏查看</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- State Analysis Section -->
+            <div class="card" style="margin-top: 20px;">
+                <div class="card-header">
+                    <span class="card-title">📋 State 字段分析</span>
+                </div>
+                <div class="card-body">
+                    <table class="data-table" id="state-analysis">
+                        <thead>
+                            <tr>
+                                <th>State字段</th>
+                                <th>操作</th>
+                                <th>Agent</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Config List -->
+            <div class="card" style="margin-top: 24px;">
+                <div class="card-header">
+                    <span class="card-title">📋 已保存的配置</span>
+                    <button class="btn btn-secondary" onclick="loadConfigs()">🔄 刷新</button>
+                </div>
+                <div class="card-body">
+                    <table class="data-table" id="config-list">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>名称</th>
+                                <th>状态</th>
+                                <th>Agent数</th>
+                                <th>创建时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Data Page -->
+        <div id="page-data" class="page-content">
+            <div class="page-header">
+                <div class="page-title-group">
+                    <div class="page-icon" style="background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%);">📁</div>
+                    <div>
+                        <h1 class="page-title">数据资产</h1>
+                        <p class="page-subtitle">数据集与模型权重管理</p>
+                    </div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-primary" onclick="showUploadModal()">📤 上传数据集</button>
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="three-col" style="margin-bottom: 24px;">
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #1890ff;" id="data-count">0</div>
+                    <div class="stat-label">数据集</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #722ed1;" id="model-count">0</div>
+                    <div class="stat-label">模型权重</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #52c41a;">--</div>
+                    <div class="stat-label">存储使用</div>
+                </div>
+            </div>
+
+            <!-- Deployed Models -->
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">
+                    <span class="card-title">🤖 已部署的模型</span>
+                    <span style="font-size: 12px; color: #8c8c8c;">微调后部署到系统的模型</span>
+                </div>
+                <div class="card-body" id="model-list-container">
+                    <div style="padding: 40px; text-align: center; color: #8c8c8c;">加载中...</div>
+                </div>
+            </div>
+
+            <!-- Dataset List -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">📊 数据集列表</span>
+                </div>
+                <div class="card-body">
+                    <table class="data-table" id="dataset-list">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>名称</th>
+                                <th>类型</th>
+                                <th>样本数</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Execution Page -->
+        <div id="page-execution" class="page-content">
+            <div class="page-header">
+                <div class="page-title-group">
+                    <div class="page-icon" style="background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);">▶️</div>
+                    <div>
+                        <h1 class="page-title">执行中心</h1>
+                        <p class="page-subtitle">批量推理与实时监控</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="four-col" style="margin-bottom: 24px;">
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #52c41a;">0/0</div>
+                    <div class="stat-label">已完成</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #1890ff;">0</div>
+                    <div class="stat-label">运行中</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #8c8c8c;">0</div>
+                    <div class="stat-label">待执行</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">0s</div>
+                    <div class="stat-label">平均耗时</div>
+                </div>
+            </div>
+
+            <div class="two-col">
+                <!-- Left: Execution Config -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">运行配置</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label class="form-label">选择系统配置</label>
+                            <select class="form-select" id="exec-config">
+                                <option value="">请选择...</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">选择测试数据集</label>
+                            <select class="form-select" id="exec-dataset">
+                                <option value="">请选择...</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="use-teacher"> 使用教师模型生成 Ground Truth
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="record-trajectory" checked> 记录执行轨迹
+                            </label>
+                        </div>
+                        <button class="btn btn-primary" style="width: 100%;" onclick="startExecution()">
+                            ▶️ 开始执行
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Right: Execution Status -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">实时执行状态</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="exec-viz" style="padding: 40px; text-align: center; color: #8c8c8c;">
+                            <div style="font-size: 48px; margin-bottom: 16px;">⏳</div>
+                            <div>等待执行...</div>
+                        </div>
+                        <div style="background: #1a1a2e; color: #a8b5ff; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 12px; margin-top: 16px; max-height: 200px; overflow: auto;" id="exec-logs">
+                            [INFO] 等待开始执行...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trajectory Page -->
+        <div id="page-trajectory" class="page-content">
+            <div class="page-header">
+                <div class="page-title-group">
+                    <div class="page-icon" style="background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%);">📊</div>
+                    <div>
+                        <h1 class="page-title">轨迹追溯</h1>
+                        <p class="page-subtitle">查询、分析与导出执行轨迹</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Filters -->
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">
+                    <span class="card-title">🔍 筛选条件</span>
+                </div>
+                <div class="card-body">
+                    <div class="four-col">
+                        <div class="form-group">
+                            <label class="form-label">系统配置</label>
+                            <select class="form-select" id="filter-config">
+                                <option value="">全部</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">数据集</label>
+                            <select class="form-select" id="filter-dataset">
+                                <option value="">全部</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Agent</label>
+                            <select class="form-select" id="filter-agent">
+                                <option value="">全部</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="display: flex; align-items: flex-end; gap: 8px;">
+                            <button class="btn btn-primary" onclick="searchTrajectories()">🔍 搜索</button>
+                            <button class="btn btn-secondary" onclick="resetFilters()">🔄 重置</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trajectory List -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">📋 轨迹列表</span>
+                    <button class="btn btn-success" onclick="exportTrajectories()">📥 导出</button>
+                </div>
+                <div class="card-body">
+                    <table class="data-table" id="trajectory-list">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>轨迹ID</th>
+                                <th>配置</th>
+                                <th>Agent</th>
+                                <th>创建时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Training Page -->
+        <div id="page-training" class="page-content">
+            <div class="page-header">
+                <div class="page-title-group">
+                    <div class="page-icon" style="background: linear-gradient(135deg, #722ed1 0%, #531dab 100%);">🎓</div>
+                    <div>
+                        <h1 class="page-title">训练工厂</h1>
+                        <p class="page-subtitle">System-level SFT / GRPO / DPO</p>
+                    </div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-primary" onclick="showCreateTrainingModalForCurrentTab()">➕ 新建训练任务</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="tabs">
+                    <div class="tab active" onclick="switchTrainingTab('sft', this)">🎯 SFT 监督微调</div>
+                    <div class="tab" onclick="switchTrainingTab('grpo', this)">🎮 GRPO 强化学习</div>
+                    <div class="tab" onclick="switchTrainingTab('dpo', this)">⚖️ DPO 直接偏好</div>
+                    <div class="tab" onclick="switchTrainingTab('eval', this)">📊 蒸馏验证</div>
+                </div>
+                
+                <div id="training-sft" class="tab-content active">
+                    <div class="alert alert-info">
+                        <span>ℹ️</span>
+                        <div>SFT训练需要为每个可训练Agent提供ground truth。系统将根据JSON中的training配置自动匹配数据集字段。</div>
+                    </div>
+                    
+                    <!-- Training Task List -->
+                    <div style="margin-bottom: 24px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="margin: 0; font-size: 16px; font-weight: 600;">训练任务列表</h3>
+                            <button class="btn btn-primary" onclick="showCreateTrainingModal('sft')">➕ 新建SFT训练任务</button>
+                        </div>
+                        <div id="sft-task-list" style="border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead style="background: #f9fafb;">
+                                    <tr>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">任务名称</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">配置</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">状态</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">进度</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">创建时间</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="sft-task-table-body">
+                                    <tr><td colspan="6" style="padding: 24px; text-align: center; color: #8c8c8c;">加载中...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="training-grpo" class="tab-content">
+                    <div class="alert alert-info">
+                        <span>ℹ️</span>
+                        <div>GRPO将整个Multi-Agent系统视为一个Policy，通过多步Rollout和Reward计算来训练Agent。支持 policy_role、learn_from 等高级配置。</div>
+                    </div>
+                    
+                    <div style="margin-bottom: 24px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="margin: 0; font-size: 16px; font-weight: 600;">GRPO 训练任务列表</h3>
+                            <button class="btn btn-primary" onclick="showCreateTrainingModal('grpo')">➕ 新建GRPO训练任务</button>
+                        </div>
+                        <div style="border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead style="background: #f9fafb;">
+                                    <tr>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">任务名称</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">配置</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">状态</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">进度</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">创建时间</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="grpo-task-table-body">
+                                    <tr><td colspan="6" style="padding: 24px; text-align: center; color: #8c8c8c;">加载中...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="training-dpo" class="tab-content">
+                    <div class="alert alert-info">
+                        <span>ℹ️</span>
+                        <div>DPO训练需要成对的偏好数据（chosen/rejected）。支持从轨迹自动生成或用户直接提供偏好对。</div>
+                    </div>
+                    
+                    <div style="margin-bottom: 24px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="margin: 0; font-size: 16px; font-weight: 600;">DPO 训练任务列表</h3>
+                            <button class="btn btn-primary" onclick="showCreateTrainingModal('dpo')">➕ 新建DPO训练任务</button>
+                        </div>
+                        <div style="border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead style="background: #f9fafb;">
+                                    <tr>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">任务名称</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">配置</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">状态</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">进度</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">创建时间</th>
+                                        <th style="padding: 12px 16px; text-align: left; font-weight: 600; font-size: 13px; color: #374151;">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dpo-task-table-body">
+                                    <tr><td colspan="6" style="padding: 24px; text-align: center; color: #8c8c8c;">加载中...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Evaluation Tab -->
+                <div id="training-eval" class="tab-content">
+                    <div class="alert alert-info">
+                        <span>ℹ️</span>
+                        <div>对训练完成的学生模型进行蒸馏效果验证：使用相同数据集重新推理，与教师模型 (GPT-4o) 的 Ground Truth 逐 Agent 对比，计算 EM、F1、ROUGE-L、蒸馏质量分数。</div>
+                    </div>
+                    
+                    <div style="margin-bottom: 24px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="margin: 0; font-size: 16px; font-weight: 600;">可验证的训练任务</h3>
+                            <button class="btn btn-secondary" onclick="loadEvaluableJobs()" style="padding: 6px 14px; font-size: 13px;">🔄 刷新</button>
+                        </div>
+                        <div id="eval-jobs-list" style="display: grid; gap: 12px;">
+                            <div style="padding: 40px; text-align: center; color: #8c8c8c;">加载中...</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Validation Report -->
+                    <div id="eval-report-section" style="display: none; margin-top: 24px;">
+                        <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">📊 蒸馏验证报告</h3>
+                        <div id="eval-report-content">
+                            <!-- Report will be rendered here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Model Picker Modal -->
+    <div id="model-picker-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
+        <div style="background: white; margin: 60px auto; max-width: 700px; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);">
+            <div style="padding: 20px 24px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                <h2 style="margin: 0; font-size: 18px; font-weight: 600;">🤖 模型选择助手 — ModelScope 魔塔社区</h2>
+                <button onclick="closeModelPicker()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6b7280;">&times;</button>
+            </div>
+            <div style="padding: 24px;">
+                <div class="alert alert-info" style="margin-bottom: 16px;">
+                    <span>ℹ️</span>
+                    <div>选择模型后，将自动在 JSON 配置中插入对应的 <code>model.name_or_path</code>。点击模型卡片可复制路径。</div>
+                </div>
+                
+                <div style="margin-bottom: 16px;">
+                    <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px;">快速搜索</label>
+                    <input type="text" id="model-search" placeholder="搜索模型名称..." oninput="filterModels(this.value)" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                </div>
+                
+                <div style="margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 12px;" onclick="filterModelsByCategory('all')">全部</button>
+                    <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 12px;" onclick="filterModelsByCategory('qwen')">Qwen 系列</button>
+                    <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 12px;" onclick="filterModelsByCategory('llama')">Llama 系列</button>
+                    <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 12px;" onclick="filterModelsByCategory('other')">其他模型</button>
+                </div>
+                
+                <div id="model-list" style="max-height: 400px; overflow-y: auto; display: grid; gap: 12px;">
+                    <!-- Models will be loaded dynamically -->
+                </div>
+                
+                <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
+                    <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px;">自定义模型路径</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" id="custom-model-path" placeholder="例如: Qwen/Qwen2.5-72B-Instruct" style="flex: 1; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        <button class="btn btn-primary" onclick="insertCustomModel()" style="padding: 8px 16px;">插入</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loading" style="display: none;">
+        <div class="loading-spinner"></div>
+    </div>
+
+    <!-- Create Training Task Modal -->
+    <div id="create-training-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
+        <div style="background: white; margin: 50px auto; max-width: 800px; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);">
+            <div style="padding: 24px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                <h2 style="margin: 0; font-size: 18px; font-weight: 600;" id="training-modal-title">新建训练任务</h2>
+                <button onclick="closeCreateTrainingModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6b7280;">×</button>
+            </div>
+            <div style="padding: 24px; max-height: 70vh; overflow-y: auto;">
+                <!-- Basic Info -->
+                <div style="margin-bottom: 24px;">
+                    <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px; color: #374151;">基本信息</h3>
+                    <div style="display: grid; gap: 16px;">
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">任务名称 *</label>
+                            <input type="text" id="training-name" placeholder="例如：MathSolver_SFT_v1" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">描述</label>
+                            <textarea id="training-description" placeholder="描述这个训练任务的目的..." rows="2" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; resize: vertical;"></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Training Type Selection -->
+                <div style="margin-bottom: 24px;">
+                    <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px; color: #374151;">训练类型</h3>
+                    <div style="display: flex; gap: 12px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px 16px; border: 2px solid #1890ff; border-radius: 8px; background: #f0f9ff; flex: 1;" id="type-sft-label">
+                            <input type="radio" name="training-type" value="sft" checked onchange="onTrainingTypeChange()" style="width: 16px; height: 16px;">
+                            <div>
+                                <div style="font-weight: 500; font-size: 14px;">SFT</div>
+                                <div style="font-size: 11px; color: #6b7280;">监督微调 (ms-swift)</div>
+                            </div>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px 16px; border: 1px solid #d1d5db; border-radius: 8px; flex: 1;" id="type-dpo-label">
+                            <input type="radio" name="training-type" value="dpo" onchange="onTrainingTypeChange()" style="width: 16px; height: 16px;">
+                            <div>
+                                <div style="font-weight: 500; font-size: 14px;">DPO</div>
+                                <div style="font-size: 11px; color: #6b7280;">偏好优化 (ms-swift)</div>
+                            </div>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px 16px; border: 1px solid #d1d5db; border-radius: 8px; flex: 1;" id="type-grpo-label">
+                            <input type="radio" name="training-type" value="grpo" onchange="onTrainingTypeChange()" style="width: 16px; height: 16px;">
+                            <div>
+                                <div style="font-weight: 500; font-size: 14px;">GRPO</div>
+                                <div style="font-size: 11px; color: #6b7280;">强化学习 (verl)</div>
+                            </div>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px 16px; border: 1px solid #d1d5db; border-radius: 8px; flex: 1;" id="type-auto-label">
+                            <input type="radio" name="training-type" value="auto" onchange="onTrainingTypeChange()" style="width: 16px; height: 16px;">
+                            <div>
+                                <div style="font-weight: 500; font-size: 14px;">自动检测</div>
+                                <div style="font-size: 11px; color: #6b7280;">根据 JSON 配置决定</div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Config Selection -->
+                <div style="margin-bottom: 24px;">
+                    <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px; color: #374151;">系统配置</h3>
+                    <div>
+                        <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">选择配置 *</label>
+                        <select id="training-config-select" onchange="onTrainingConfigChange()" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; background: white;">
+                            <option value="">请选择系统配置</option>
+                        </select>
+                        <div id="training-agents-info" style="margin-top: 12px; padding: 12px; background: #f9fafb; border-radius: 6px; font-size: 13px; display: none;">
+                            <div style="font-weight: 500; margin-bottom: 8px;">可训练 Agents：</div>
+                            <div id="training-agents-list"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dataset Selection -->
+                <div style="margin-bottom: 24px;">
+                    <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px; color: #374151;">训练数据</h3>
+                    <div>
+                        <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">选择数据集 *</label>
+                        <select id="training-dataset-select" onchange="onTrainingDatasetChange()" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; background: white;">
+                            <option value="">请选择数据集</option>
+                        </select>
+                        <div id="training-dataset-preview" style="margin-top: 12px; padding: 12px; background: #f9fafb; border-radius: 6px; font-size: 13px; display: none;">
+                            <div style="font-weight: 500; margin-bottom: 8px;">数据预览：</div>
+                            <div id="training-dataset-info"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- DPO Hyperparameters (hidden by default) -->
+                <div id="dpo-hparams" style="display: none; margin-bottom: 24px;">
+                    <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px; color: #374151;">🎯 DPO 超参数</h3>
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">学习率 (LR)</label>
+                            <input type="text" id="dpo-lr" value="5e-7" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">Beta (DPO 温度参数)</label>
+                            <input type="text" id="dpo-beta" value="0.1" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">训练轮数 (Epochs)</label>
+                            <input type="number" id="dpo-epochs" value="3" min="1" max="10" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">Batch Size</label>
+                            <input type="number" id="dpo-batch-size" value="2" min="1" max="16" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GRPO Hyperparameters (hidden by default) -->
+                <div id="grpo-hparams" style="display: none; margin-bottom: 24px;">
+                    <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px; color: #374151;">🏆 GRPO 超参数</h3>
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">学习率 (LR)</label>
+                            <input type="text" id="grpo-lr" value="1e-6" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">Rollout Batch Size</label>
+                            <input type="number" id="grpo-rollout-batch" value="64" min="1" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">KL Coefficient</label>
+                            <input type="text" id="grpo-kl-coef" value="0.01" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">Clip Range</label>
+                            <input type="text" id="grpo-clip-range" value="0.2" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">Mini Batch Size</label>
+                            <input type="number" id="grpo-mini-batch" value="8" min="1" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">Advantage Estimator</label>
+                            <select id="grpo-advantage" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                                <option value="gae">GAE</option>
+                                <option value="grpo">GRPO</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SFT Hyperparameters -->
+                <div id="sft-hparams">
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">学习率 (Learning Rate)</label>
+                            <input type="text" id="training-lr" value="2e-5" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">训练轮数 (Epochs)</label>
+                            <input type="number" id="training-epochs" value="3" min="1" max="10" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">Batch Size</label>
+                            <input type="number" id="training-batch-size" value="4" min="1" max="32" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">Max Length</label>
+                            <input type="number" id="training-max-length" value="2048" min="512" max="8192" step="256" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">Warmup Ratio</label>
+                            <input type="text" id="training-warmup" value="0.1" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #374151;">Weight Decay</label>
+                            <input type="text" id="training-weight-decay" value="0.01" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                        </div>
+                    </div>
+                    <div style="margin-top: 12px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" id="training-fp16" checked style="width: 16px; height: 16px;">
+                            <span style="font-size: 13px; color: #374151;">使用 FP16 混合精度训练</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- 高效训练技术 -->
+                <div style="margin-bottom: 24px;">
+                    <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px; color: #374151;">⚡ 高效训练技术</h3>
+                    
+                    <!-- LoRA 设置 -->
+                    <div style="margin-bottom: 16px; padding: 16px; background: #f9fafb; border-radius: 8px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 12px;">
+                            <input type="checkbox" id="training-use-lora" checked style="width: 16px; height: 16px;">
+                            <span style="font-size: 14px; font-weight: 500; color: #374151;">使用 LoRA 参数高效微调</span>
+                        </label>
+                        <div id="lora-settings" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-left: 24px;">
+                            <div>
+                                <label style="display: block; font-size: 12px; font-weight: 500; margin-bottom: 4px; color: #666;">LoRA Rank</label>
+                                <input type="number" id="training-lora-rank" value="8" min="1" max="64" style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px;">
+                            </div>
+                            <div>
+                                <label style="display: block; font-size: 12px; font-weight: 500; margin-bottom: 4px; color: #666;">LoRA Alpha</label>
+                                <input type="number" id="training-lora-alpha" value="32" min="1" max="128" style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px;">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 其他加速选项 -->
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 12px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <input type="checkbox" id="training-use-flash-attn" checked style="width: 16px; height: 16px;">
+                            <div>
+                                <div style="font-size: 13px; font-weight: 500; color: #374151;">Flash Attention</div>
+                                <div style="font-size: 11px; color: #6b7280;">加速注意力计算</div>
+                            </div>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px; background: #f9fafb; border-radius: 8px;">
+                            <input type="checkbox" id="training-gradient-checkpointing" checked style="width: 16px; height: 16px;">
+                            <div>
+                                <div style="font-size: 13px; font-weight: 500; color: #374151;">梯度检查点</div>
+                                <div style="font-size: 11px; color: #6b7280;">节省显存</div>
+                            </div>
+                        </label>
+                    </div>
+                    
+                    <!-- 量化选项 -->
+                    <div style="padding: 12px; background: #f9fafb; border-radius: 8px;">
+                        <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 8px; color: #374151;">量化训练 (可选)</label>
+                        <select id="training-quantization" style="width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px;">
+                            <option value="">不使用量化</option>
+                            <option value="8bit">8-bit 量化 (节省显存)</option>
+                            <option value="4bit">4-bit 量化 (QLoRA, 最省显存)</option>
+                        </select>
+                    </div>
+                </div>
+
+                </div><!-- end sft-hparams -->
+
+                <!-- Data Source Option -->
+                <div style="margin-bottom: 24px;">
+                    <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px; color: #374151;">训练数据来源</h3>
+                    <div style="display: flex; gap: 16px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px 16px; border: 2px solid #1890ff; border-radius: 8px; background: #f0f9ff; flex: 1;">
+                            <input type="radio" name="data-source" value="trajectory" checked style="width: 16px; height: 16px;">
+                            <div>
+                                <div style="font-weight: 500; font-size: 14px;">从轨迹生成</div>
+                                <div style="font-size: 12px; color: #6b7280;">使用执行中心生成的轨迹数据</div>
+                            </div>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px 16px; border: 1px solid #d1d5db; border-radius: 8px; flex: 1;">
+                            <input type="radio" name="data-source" value="dataset" style="width: 16px; height: 16px;">
+                            <div>
+                                <div style="font-weight: 500; font-size: 14px;">直接使用数据集</div>
+                                <div style="font-size: 12px; color: #6b7280;">数据集已包含ground truth</div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div style="padding: 16px 24px; border-top: 1px solid #e5e7eb; display: flex; justify-content: flex-end; gap: 12px;">
+                <button class="btn btn-secondary" onclick="closeCreateTrainingModal()">取消</button>
+                <button class="btn btn-primary" onclick="createTrainingTask()">创建训练任务</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Training Detail Modal -->
+    <div id="training-detail-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto;">
+        <div style="background: white; margin: 30px auto; max-width: 900px; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);">
+            <div style="padding: 24px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                <h2 style="margin: 0; font-size: 18px; font-weight: 600;">训练任务详情</h2>
+                <button onclick="closeTrainingDetailModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6b7280;">×</button>
+            </div>
+            <div style="padding: 24px;">
+                <div id="training-detail-content">
+                    <!-- Content will be loaded dynamically -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

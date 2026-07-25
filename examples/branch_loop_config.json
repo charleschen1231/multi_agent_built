@@ -1,0 +1,319 @@
+{
+  "system_name": "智能客服问题解决系统",
+  "description": "包含分支判断和循环迭代的多Agent系统",
+  "agents": [
+    {
+      "agent_id": "intent_classifier",
+      "model": {
+        "name_or_path": "Qwen2.5-7B-Instruct"
+      },
+      "instruction_prompt": {
+        "instruction": "你是意图分类器：分析用户问题，判断问题类型和复杂度。",
+        "prompt_template": "用户问题：{{input.user_request}}\n请分析并输出JSON格式：{\"intent\": \"simple|complex|complaint\", \"confidence\": 0.0-1.0, \"needs_escalation\": true/false}"
+      },
+      "input": [
+        { "from": "user", "key": "user_request" }
+      ],
+      "output": [
+        { 
+          "key": "classification_result",
+          "to": [
+            { "agent": "router", "as": "classification" }
+          ]
+        }
+      ]
+    },
+    {
+      "agent_id": "router",
+      "model": {
+        "name_or_path": "Qwen2.5-7B-Instruct"
+      },
+      "type": "branch",
+      "instruction_prompt": {
+        "instruction": "你是路由器：根据分类结果决定流程走向。",
+        "prompt_template": "分类结果：{{input.classification}}\n请输出路由决策"
+      },
+      "input": [
+        { "from": "intent_classifier", "key": "classification_result" }
+      ],
+      "branches": {
+        "conditions": [
+          {
+            "condition": "{{input.classification.intent}} == 'simple'",
+            "target": "simple_answer_agent",
+            "output_mapping": { "user_request": "question" }
+          },
+          {
+            "condition": "{{input.classification.intent}} == 'complex'",
+            "target": "problem_solver",
+            "output_mapping": { "user_request": "problem" }
+          },
+          {
+            "condition": "{{input.classification.intent}} == 'complaint'",
+            "target": "complaint_handler",
+            "output_mapping": { "user_request": "complaint" }
+          }
+        ],
+        "default": "simple_answer_agent"
+      }
+    },
+    {
+      "agent_id": "simple_answer_agent",
+      "model": {
+        "name_or_path": "Qwen2.5-7B-Instruct"
+      },
+      "instruction_prompt": {
+        "instruction": "你是简单问题回答器：直接回答用户的简单问题。",
+        "prompt_template": "问题：{{input.question}}\n请给出简洁准确的回答："
+      },
+      "input": [
+        { "from": "router", "key": "question" }
+      ],
+      "output": [
+        { 
+          "key": "answer",
+          "to": [
+            { "agent": "quality_checker", "as": "response" },
+            { "user": true }
+          ]
+        }
+      ]
+    },
+    {
+      "agent_id": "problem_solver",
+      "model": {
+        "name_or_path": "Qwen2.5-32B-Instruct"
+      },
+      "instruction_prompt": {
+        "instruction": "你是问题解决专家：分析复杂问题并给出解决方案。",
+        "prompt_template": "复杂问题：{{input.problem}}\n当前尝试次数：{{input.iteration_count || 0}}\n历史尝试：{{input.solution_history || '无'}}\n请分析问题并给出解决方案："
+      },
+      "input": [
+        { "from": "router", "key": "problem" },
+        { "from": "loop_controller", "key": "iteration_count", "optional": true },
+        { "from": "critic", "key": "feedback", "optional": true }
+      ],
+      "output": [
+        { 
+          "key": "solution",
+          "to": [
+            { "agent": "critic", "as": "proposed_solution" }
+          ]
+        }
+      ]
+    },
+    {
+      "agent_id": "critic",
+      "model": {
+        "name_or_path": "Qwen2.5-7B-Instruct"
+      },
+      "instruction_prompt": {
+        "instruction": "你是评估专家：评估解决方案的质量，判断是否需要改进。",
+        "prompt_template": "原始问题：{{input.original_problem}}\n当前解决方案：{{input.proposed_solution}}\n请评估并输出JSON：{\"quality_score\": 0-10, \"is_satisfactory\": true/false, \"feedback\": \"改进建议\"}"
+      },
+      "input": [
+        { "from": "problem_solver", "key": "proposed_solution" },
+        { "from": "router", "key": "problem", "as": "original_problem" }
+      ],
+      "output": [
+        { 
+          "key": "evaluation",
+          "to": [
+            { "agent": "loop_controller", "as": "critic_feedback" }
+          ]
+        }
+      ]
+    },
+    {
+      "agent_id": "loop_controller",
+      "model": {
+        "name_or_path": "Qwen2.5-7B-Instruct"
+      },
+      "type": "loop",
+      "instruction_prompt": {
+        "instruction": "你是循环控制器：决定是否继续迭代优化解决方案。",
+        "prompt_template": "评估结果：{{input.critic_feedback}}\n当前迭代次数：{{input.iteration_count || 0}}\n请输出控制决策"
+      },
+      "input": [
+        { "from": "critic", "key": "evaluation", "as": "critic_feedback" },
+        { "from": "self", "key": "iteration_count", "optional": true }
+      ],
+      "loop_config": {
+        "max_iterations": 3,
+        "condition": "{{input.critic_feedback.is_satisfactory}} == false && {{input.iteration_count}} < {{max_iterations}}",
+        "continue_branch": {
+          "target": "problem_solver",
+          "output_mapping": {
+            "iteration_count": "iteration_count + 1",
+            "solution_history": "append_solution",
+            "feedback": "critic_feedback"
+          }
+        },
+        "exit_branch": {
+          "target": "solution_formatter",
+          "output_mapping": {
+            "final_solution": "last_solution",
+            "quality_score": "critic_feedback.quality_score"
+          }
+        }
+      },
+      "output": [
+        { 
+          "key": "iteration_count",
+          "to": [
+            { "agent": "problem_solver", "as": "iteration_count", "condition": "loop_continue" }
+          ]
+        }
+      ]
+    },
+    {
+      "agent_id": "solution_formatter",
+      "model": {
+        "name_or_path": "Qwen2.5-7B-Instruct"
+      },
+      "instruction_prompt": {
+        "instruction": "你是解决方案格式化器：将最终解决方案整理成用户友好的格式。",
+        "prompt_template": "最终解决方案：{{input.final_solution}}\n质量评分：{{input.quality_score}}\n请整理成清晰的回答格式："
+      },
+      "input": [
+        { "from": "loop_controller", "key": "final_solution" },
+        { "from": "loop_controller", "key": "quality_score" }
+      ],
+      "output": [
+        { 
+          "key": "formatted_answer",
+          "to": [
+            { "agent": "quality_checker", "as": "response" },
+            { "user": true }
+          ]
+        }
+      ]
+    },
+    {
+      "agent_id": "complaint_handler",
+      "model": {
+        "name_or_path": "Qwen2.5-32B-Instruct"
+      },
+      "instruction_prompt": {
+        "instruction": "你是投诉处理专员：专业处理用户投诉，提供安抚和解决方案。",
+        "prompt_template": "用户投诉：{{input.complaint}}\n请给出专业的安抚和解决方案："
+      },
+      "input": [
+        { "from": "router", "key": "complaint" }
+      ],
+      "output": [
+        { 
+          "key": "complaint_response",
+          "to": [
+            { "agent": "quality_checker", "as": "response" },
+            { "user": true }
+          ]
+        }
+      ]
+    },
+    {
+      "agent_id": "quality_checker",
+      "model": {
+        "name_or_path": "Qwen2.5-7B-Instruct"
+      },
+      "instruction_prompt": {
+        "instruction": "你是质量检查器：检查回答是否满足基本质量标准。",
+        "prompt_template": "用户问题：{{input.original_request}}\n系统回答：{{input.response}}\n请检查并输出：{\"passed\": true/false, \"issues\": [\"问题1\", \"问题2\"]}"
+      },
+      "input": [
+        { "from": "simple_answer_agent", "key": "answer", "as": "response", "optional": true },
+        { "from": "solution_formatter", "key": "formatted_answer", "as": "response", "optional": true },
+        { "from": "complaint_handler", "key": "complaint_response", "as": "response", "optional": true },
+        { "from": "user", "key": "user_request", "as": "original_request" }
+      ],
+      "branches": {
+        "conditions": [
+          {
+            "condition": "{{input.quality_check.passed}} == true",
+            "target": "output_finalizer",
+            "output_mapping": { "response": "final_output" }
+          },
+          {
+            "condition": "{{input.quality_check.passed}} == false",
+            "target": "fallback_handler",
+            "output_mapping": { "issues": "quality_issues", "original_response": "response" }
+          }
+        ]
+      },
+      "output": [
+        { "key": "quality_check", "to": [{ "agent": "self", "as": "branch_decision" }] }
+      ]
+    },
+    {
+      "agent_id": "fallback_handler",
+      "model": {
+        "name_or_path": "Qwen2.5-7B-Instruct"
+      },
+      "instruction_prompt": {
+        "instruction": "你是回退处理器：当主流程出现质量问题时，提供安全的默认回答。",
+        "prompt_template": "原始回答：{{input.original_response}}\n质量问题：{{input.quality_issues}}\n请提供改进后的安全回答："
+      },
+      "input": [
+        { "from": "quality_checker", "key": "quality_issues" },
+        { "from": "quality_checker", "key": "original_response" }
+      ],
+      "output": [
+        { 
+          "key": "fallback_answer",
+          "to": [
+            { "agent": "output_finalizer", "as": "final_output" },
+            { "user": true }
+          ]
+        }
+      ]
+    },
+    {
+      "agent_id": "output_finalizer",
+      "model": {
+        "name_or_path": "Qwen2.5-7B-Instruct"
+      },
+      "instruction_prompt": {
+        "instruction": "你是输出最终确定器：整理并输出最终回答。",
+        "prompt_template": "最终输出内容：{{input.final_output}}\n请确认并格式化："
+      },
+      "input": [
+        { "from": "quality_checker", "key": "final_output", "optional": true },
+        { "from": "fallback_handler", "key": "fallback_answer", "as": "final_output", "optional": true }
+      ],
+      "output": [
+        { 
+          "key": "final_response",
+          "to": [
+            { "user": true }
+          ]
+        }
+      ]
+    }
+  ],
+  "global_config": {
+    "execution_mode": "sequential",
+    "max_execution_time": 120,
+    "enable_trace": true,
+    "branching": {
+      "enabled": true,
+      "default_timeout": 30
+    },
+    "looping": {
+      "enabled": true,
+      "max_global_iterations": 10,
+      "prevent_infinite_loop": true
+    }
+  },
+  "training_config": {
+    "mode": "sft",
+    "trainable_agents": ["intent_classifier", "problem_solver", "critic"],
+    "dataset_mapping": {
+      "input_key": "user_request",
+      "ground_truth_mapping": {
+        "intent_classifier": "intent_gt",
+        "problem_solver": "solution_gt",
+        "critic": "evaluation_gt"
+      }
+    }
+  }
+}

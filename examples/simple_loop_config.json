@@ -1,0 +1,131 @@
+[
+  {
+    "agent_id": "initializer",
+    "model": {
+      "name_or_path": "Qwen2.5-7B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "初始化器：设置初始状态和参数",
+      "prompt_template": "任务：{{input.user_request}}\n初始化迭代计数器和历史记录"
+    },
+    "input": [
+      { "from": "user", "key": "user_request" }
+    ],
+    "output": [
+      {
+        "key": "init_state",
+        "to": [
+          { "agent": "generator", "as": "task" }
+        ]
+      }
+    ]
+  },
+  {
+    "agent_id": "generator",
+    "model": {
+      "name_or_path": "Qwen2.5-7B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "生成器：根据任务生成内容",
+      "prompt_template": "任务：{{input.task}}\n迭代次数：{{input.iteration || 0}}\n历史反馈：{{input.feedback || '无'}}\n请生成内容："
+    },
+    "input": [
+      { "from": "initializer", "key": "task" },
+      { "from": "refiner", "key": "iteration", "optional": true },
+      { "from": "refiner", "key": "improvement", "optional": true, "as": "feedback" }
+    ],
+    "output": [
+      {
+        "key": "generated_content",
+        "to": [
+          { "agent": "evaluator", "as": "content" }
+        ]
+      }
+    ]
+  },
+  {
+    "agent_id": "evaluator",
+    "model": {
+      "name_or_path": "Qwen2.5-7B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "评估器：评估生成内容的质量",
+      "prompt_template": "内容：{{input.content}}\n请评估质量（1-10分）并判断是否需要改进"
+    },
+    "input": [
+      { "from": "generator", "key": "generated_content", "as": "content" }
+    ],
+    "output": [
+      {
+        "key": "evaluation_result",
+        "to": [
+          { "agent": "refiner", "as": "eval_result" }
+        ]
+      }
+    ]
+  },
+  {
+    "agent_id": "refiner",
+    "model": {
+      "name_or_path": "Qwen2.5-7B-Instruct"
+    },
+    "type": "loop_controller",
+    "instruction_prompt": {
+      "instruction": "循环控制器：决定是否继续迭代",
+      "prompt_template": "评估结果：{{input.eval_result}}\n当前迭代：{{input.current_iter || 0}}"
+    },
+    "input": [
+      { "from": "evaluator", "key": "evaluation_result", "as": "eval_result" },
+      { "from": "self", "key": "iteration", "optional": true, "as": "current_iter" }
+    ],
+    "loop": {
+      "max_iterations": 3,
+      "condition": "{{input.eval_result.score}} < 8 && {{input.current_iter}} < 3",
+      "on_continue": {
+        "output": {
+          "iteration": "{{input.current_iter}} + 1",
+          "improvement": "{{input.eval_result.suggestions}}"
+        },
+        "next": "generator"
+      },
+      "on_exit": {
+        "output": {
+          "final_content": "{{input.eval_result.content}}",
+          "final_score": "{{input.eval_result.score}}"
+        },
+        "next": "finalizer"
+      }
+    },
+    "output": [
+      {
+        "key": "loop_output",
+        "to": [
+          { "agent": "generator", "as": "loop_data", "condition": "continue" },
+          { "agent": "finalizer", "as": "final_data", "condition": "exit" }
+        ]
+      }
+    ]
+  },
+  {
+    "agent_id": "finalizer",
+    "model": {
+      "name_or_path": "Qwen2.5-7B-Instruct"
+    },
+    "instruction_prompt": {
+      "instruction": "最终确定器：输出最终结果",
+      "prompt_template": "最终内容：{{input.final_data.final_content}}\n质量评分：{{input.final_data.final_score}}"
+    },
+    "input": [
+      { "from": "refiner", "key": "final_content", "optional": true },
+      { "from": "refiner", "key": "final_score", "optional": true }
+    ],
+    "output": [
+      {
+        "key": "output",
+        "to": [
+          { "user": true }
+        ]
+      }
+    ]
+  }
+]

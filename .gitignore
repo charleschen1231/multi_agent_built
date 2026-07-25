@@ -1,0 +1,36 @@
+# 敏感信息
+.env
+.env.txt
+
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 数据库
+*.db
+
+# 训练输出（太大）
+training_outputs/
+test_output/
+test_output_dir/
+test_outputs/
+test_gen_output/
+evaluation_outputs/
+
+# 数据上传
+data/uploads/
+data/app.db
+
+# 原型文件
+web_redesign_prototype*.html
+
+# 文档
+说明文档.txt.docx
+
+# 模型缓存
+models/
