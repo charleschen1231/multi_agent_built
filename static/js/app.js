@@ -839,7 +839,12 @@ async function saveConfig() {
         loadConfigs();
         loadExecutionOptions();
         loadTrainingOptions();
-        loadBuilderConfigOptions();
+        await loadBuilderConfigOptions();
+        // Auto-select the newly saved config
+        const select = document.getElementById('builder-config-select');
+        if (select && result.id) {
+            select.value = result.id;
+        }
     } catch (error) {
         alert('保存失败: ' + error.message);
     } finally {
