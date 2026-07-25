@@ -52,6 +52,7 @@ main_web.py
 
 # 重复/错误目录
 traning/
+web/
 
 # 内部文档与笔记（不交付）
 AutoDL*.md
