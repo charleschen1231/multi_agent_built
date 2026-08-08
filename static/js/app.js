@@ -2406,7 +2406,7 @@ async function loadEvaluableJobs() {
                     </div>
                     <div style="display: flex; gap: 8px;">
                         <button class="btn btn-secondary" style="padding: 8px 16px; font-size: 13px; background: #8b5cf6; color: white; border-color: #8b5cf6;" 
-                                onclick="runValidation(${job.id})">
+                                onclick="runValidation(${job.id}, '${job.type || 'sft'}')">
                             📊 运行验证
                         </button>
                         <button class="btn btn-secondary" style="padding: 8px 16px; font-size: 13px;" 
@@ -2422,7 +2422,19 @@ async function loadEvaluableJobs() {
     }
 }
 
-async function runValidation(jobId) {
+async function runValidation(jobId, jobType) {
+    // 根据训练类型更新验证描述
+    const descEl = document.getElementById('eval-description');
+    if (descEl) {
+        if (jobType === 'dpo') {
+            descEl.textContent = 'DPO 偏好对齐验证：使用相同数据集对基座模型和 DPO 微调模型分别推理，对比 chosen/rejected 偏好对，计算偏好对齐分数、拒绝率、偏好准确率。';
+        } else if (jobType === 'grpo') {
+            descEl.textContent = 'GRPO 强化学习验证：使用相同数据集重新推理，与 Ground Truth 逐 Agent 对比，计算奖励分数、策略改进幅度。';
+        } else {
+            descEl.textContent = '对训练完成的学生模型进行蒸馏效果验证：使用相同数据集重新推理，与 Ground Truth 逐 Agent 对比，计算对齐分数、蒸馏质量分数。';
+        }
+    }
+    
     const content = document.getElementById('eval-report-content');
     const section = document.getElementById('eval-report-section');
     if (section) section.style.display = 'block';
