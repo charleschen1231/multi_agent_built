@@ -721,8 +721,9 @@ class DPOTrainer:
                     log_callback(f"Using LoRA (rank={default_params.get('lora_rank', 8)}, "
                                f"alpha={default_params.get('lora_alpha', 32)})")
             
-            if default_params.get('use_flash_attn'):
-                cmd.extend(['--attn_impl', 'flash_attn'])
+            # Explicitly set attn_impl to eager since flash_attn may not be installed.
+            # ms-swift auto-detects GPU and defaults to flash_attn, causing ImportError.
+            cmd.extend(['--attn_impl', 'eager'])
             
             if default_params.get('gradient_checkpointing'):
                 cmd.extend(['--gradient_checkpointing', 'true'])
