@@ -399,7 +399,7 @@ class DistillationValidator:
             # 对每个 trainable agent 执行推理
             for agent in config_json:
                 training = agent.get('training', {})
-                if not (training.get('trainable') and training.get('mode') == 'sft'):
+                if not (training.get('trainable') and training.get('mode') in ('sft', 'dpo')):
                     continue
 
                 agent_id = agent.get('agent_id', '')
@@ -557,18 +557,23 @@ class DistillationValidator:
             from_agent = mapping.get('from', 'user')
 
             if from_agent == 'user':
-                # 从数据集获取
-                val = sample.get(key)
-                if val is None:
-                    inp = sample.get('input', {})
-                    if isinstance(inp, dict):
-                        val = inp.get(key)
+                # 优先从 messages 格式获取用户输入
+                if 'messages' in sample:
+                    user_msgs = [m for m in sample['messages'] if m.get('role') == 'user']
+                    val = user_msgs[-1].get('content', '') if user_msgs else ''
+                else:
+                    # 从传统格式获取
+                    val = sample.get(key)
+                    if val is None:
+                        inp = sample.get('input', {})
+                        if isinstance(inp, dict):
+                            val = inp.get(key)
                 input_dict[key] = str(val) if val is not None else ''
             else:
                 # 从 teacher GT 获取前置 agent 的输出
                 gt_list = teacher_outputs.get(from_agent, [])
                 # 使用 sample index 对应的 GT
-                sample_idx = sample.get('sample_index', 0)
+                sample_idx = sample.get('metadata', {}).get('sample_index', sample.get('sample_index', 0))
                 if isinstance(sample_idx, int) and sample_idx < len(gt_list):
                     input_dict[key] = gt_list[sample_idx]
                 else:
@@ -840,7 +845,7 @@ class DistillationValidator:
             if base_model.startswith('./training_outputs') or base_model.startswith('training_outputs'):
                 base_model = 'Qwen/Qwen2.5-0.5B-Instruct'
             
-            base_outputs = await self._run_model_inference(
+            base_outputs, base_ok = await self._run_model_inference(
                 config_json=config_json,
                 dataset_file=dataset_file,
                 model_path=base_model,
@@ -850,9 +855,9 @@ class DistillationValidator:
             )
             
             report['phases']['student_before'] = {
-                'status': 'completed' if base_outputs else 'failed',
+                'status': 'completed' if base_ok else 'failed',
                 'model': base_model,
-                'sample_count': len(next(iter(base_outputs.values()), [])) if base_outputs else 0
+                'sample_count': len(next(iter(base_outputs.values()), [])) if base_ok else 0
             }
             
             # ─ Phase 3: DPO 微调模型推理 ─
@@ -1045,12 +1050,16 @@ class DistillationValidator:
         """
         从 DPO 数据集提取偏好对
         
+        支持两种数据格式：
+        1. messages 格式: {"messages": [...], "chosen": {"messages": [...]}, "rejected_response": "..."}
+        2. 传统格式: {"instruction": "...", "input": "...", "chosen": "...", "rejected": "..."}
+        
         Args:
             config_json: 系统配置
-            dataset_file: DPO 数据集文件 (JSONL，包含 chosen/rejected 字段)
+            dataset_file: DPO 数据集文件 (JSONL)
         
         Returns:
-            Dict[agent_id, List[pair]]: 按 agent 分组的偏好对
+            Dict[agent_id, List[pair]]: 按 agent 分组的偏好对（chosen/rejected 均为字符串）
         """
         preferences = {}
         
@@ -1070,26 +1079,55 @@ class DistillationValidator:
                 
                 sample = json.loads(line)
                 
-                # 支持两种格式：
-                # 1. 直接包含 chosen/rejected
-                # 2. 包含 metadata.agent_id
+                # 按 agent_id 分组
                 agent_id = sample.get('metadata', {}).get('agent_id')
                 if not agent_id:
-                    # 尝试从所有 agent 中匹配
                     for agent in config_json:
                         training = agent.get('training', {})
                         if training.get('trainable') and training.get('mode') == 'dpo':
                             agent_id = agent.get('agent_id', '')
                             break
                 
-                if agent_id and agent_id in preferences:
-                    pair = {
-                        'chosen': sample.get('chosen', ''),
-                        'rejected': sample.get('rejected', ''),
-                        'instruction': sample.get('instruction', ''),
-                        'input': sample.get('input', '')
-                    }
-                    preferences[agent_id].append(pair)
+                if not agent_id or agent_id not in preferences:
+                    continue
+                
+                # 提取 chosen 文本（可能是 dict 或 string）
+                chosen_val = sample.get('chosen', '')
+                if isinstance(chosen_val, dict):
+                    # {"messages": [{"role": "assistant", "content": "..."}]}
+                    msgs = chosen_val.get('messages', [])
+                    chosen_text = msgs[-1].get('content', '') if msgs else ''
+                else:
+                    chosen_text = str(chosen_val)
+                
+                # 提取 rejected 文本（可能是 rejected_response 或 rejected）
+                rejected_text = sample.get('rejected_response', '')
+                if not rejected_text:
+                    rejected_val = sample.get('rejected', '')
+                    if isinstance(rejected_val, dict):
+                        msgs = rejected_val.get('messages', [])
+                        rejected_text = msgs[-1].get('content', '') if msgs else ''
+                    else:
+                        rejected_text = str(rejected_val)
+                
+                # 提取用户指令（从 messages 或 instruction/input）
+                if 'messages' in sample:
+                    user_msgs = [m for m in sample['messages'] if m.get('role') == 'user']
+                    instruction_text = user_msgs[-1].get('content', '') if user_msgs else ''
+                else:
+                    instruction_text = sample.get('instruction', '')
+                    input_text = sample.get('input', '')
+                    if input_text:
+                        instruction_text = f"{instruction_text}\n{input_text}" if instruction_text else input_text
+                
+                pair = {
+                    'chosen': chosen_text,
+                    'rejected': rejected_text,
+                    'instruction': instruction_text,
+                    'input': '',
+                    'user_message': instruction_text
+                }
+                preferences[agent_id].append(pair)
         
         return preferences
 
