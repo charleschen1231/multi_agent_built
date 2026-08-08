@@ -1926,6 +1926,7 @@ function renderValidationReportInline(jobId, report) {
     const summary = report.summary || {};
     const agentResults = report.agent_results || {};
     const phases = report.phases || {};
+    const isDpo = summary.mode === 'dpo';
     
     const avgBefore = (summary.avg_before_score || 0) * 100;
     const avgAfter = (summary.avg_after_score || 0) * 100;
@@ -1941,7 +1942,7 @@ function renderValidationReportInline(jobId, report) {
     
     let html = `
         <div style="margin-top: 20px; padding: 20px; background: linear-gradient(135deg, #f0f9ff 0%, #e6f7ff 100%); border: 1px solid #91caff; border-radius: 12px;">
-            <h4 style="font-weight: 600; margin-bottom: 16px; color: #0958d9;">📊 蒸馏效果三向对比报告</h4>
+            <h4 style="font-weight: 600; margin-bottom: 16px; color: #0958d9;"> ${isDpo ? 'DPO 偏好对齐' : '蒸馏效果'}三向对比报告</h4>
             
             <!-- Phase Status -->
             <div style="display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;">
@@ -2036,8 +2037,7 @@ function renderValidationReportInline(jobId, report) {
                 html += `
                     <div style="padding: 8px; background: #f0f7ff; border-radius: 6px; font-size: 11px;">
                         <div style="font-weight: 600; color: #1890ff; margin-bottom: 4px;">🔵 基座模型</div>
-                        <div>EM: ${((beforeMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((beforeMetrics.avg_token_f1||0)*100).toFixed(1)}%</div>
-                        <div>ROUGE-L: ${((beforeMetrics.avg_rouge_l||0)*100).toFixed(1)}%</div>
+                        ${isDpo ? `<div>偏好对齐: ${((beforeMetrics.chosen_alignment_score||0)*100).toFixed(1)}% | 拒绝率: ${((beforeMetrics.rejection_rate||0)*100).toFixed(1)}%</div><div>偏好准确率: ${((beforeMetrics.preference_accuracy||0)*100).toFixed(1)}%</div>` : `<div>EM: ${((beforeMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((beforeMetrics.avg_token_f1||0)*100).toFixed(1)}%</div><div>ROUGE-L: ${((beforeMetrics.avg_rouge_l||0)*100).toFixed(1)}%</div>`}
                     </div>
                 `;
             } else {
@@ -2046,11 +2046,13 @@ function renderValidationReportInline(jobId, report) {
             
             // After metrics
             if (afterMetrics) {
+                const aHtml = isDpo
+                    ? `<div>偏好对齐: ${((afterMetrics.chosen_alignment_score||0)*100).toFixed(1)}% | 拒绝率: ${((afterMetrics.rejection_rate||0)*100).toFixed(1)}%</div><div>偏好准确率: ${((afterMetrics.preference_accuracy||0)*100).toFixed(1)}%</div>`
+                    : `<div>EM: ${((afterMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((afterMetrics.avg_token_f1||0)*100).toFixed(1)}%</div><div>ROUGE-L: ${((afterMetrics.avg_rouge_l||0)*100).toFixed(1)}%</div>`;
                 html += `
                     <div style="padding: 8px; background: #f6ffed; border-radius: 6px; font-size: 11px;">
-                        <div style="font-weight: 600; color: #52c41a; margin-bottom: 4px;">🟢 微调模型</div>
-                        <div>EM: ${((afterMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((afterMetrics.avg_token_f1||0)*100).toFixed(1)}%</div>
-                        <div>ROUGE-L: ${((afterMetrics.avg_rouge_l||0)*100).toFixed(1)}%</div>
+                        <div style="font-weight: 600; color: #52c41a; margin-bottom: 4px;"> 微调模型</div>
+                        ${aHtml}
                     </div>
                 `;
             } else {
@@ -2513,6 +2515,7 @@ function renderValidationReport(jobId, report, result) {
     const summary = report.summary || {};
     const agentResults = report.agent_results || {};
     const phases = report.phases || {};
+    const isDpo = summary.mode === 'dpo';
     
     const avgBefore = (summary.avg_before_score || 0) * 100;
     const avgAfter = (summary.avg_after_score || 0) * 100;
@@ -2587,10 +2590,10 @@ function renderValidationReport(jobId, report, result) {
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px;">
                         <div style="padding: 8px; background: #f0f7ff; border-radius: 6px;">
-                            ${beforeMetrics ? `EM: ${((beforeMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((beforeMetrics.avg_token_f1||0)*100).toFixed(1)}% | R-L: ${((beforeMetrics.avg_rouge_l||0)*100).toFixed(1)}%` : '无数据'}
+                            ${beforeMetrics ? (isDpo ? `偏好对齐: ${((beforeMetrics.chosen_alignment_score||0)*100).toFixed(1)}% | 拒绝率: ${((beforeMetrics.rejection_rate||0)*100).toFixed(1)}% | 偏好准确率: ${((beforeMetrics.preference_accuracy||0)*100).toFixed(1)}%` : `EM: ${((beforeMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((beforeMetrics.avg_token_f1||0)*100).toFixed(1)}% | R-L: ${((beforeMetrics.avg_rouge_l||0)*100).toFixed(1)}%`) : '无数据'}
                         </div>
                         <div style="padding: 8px; background: #f6ffed; border-radius: 6px;">
-                            ${afterMetrics ? `EM: ${((afterMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((afterMetrics.avg_token_f1||0)*100).toFixed(1)}% | R-L: ${((afterMetrics.avg_rouge_l||0)*100).toFixed(1)}%` : '无数据'}
+                            ${afterMetrics ? (isDpo ? `偏好对齐: ${((afterMetrics.chosen_alignment_score||0)*100).toFixed(1)}% | 拒绝率: ${((afterMetrics.rejection_rate||0)*100).toFixed(1)}% | 偏好准确率: ${((afterMetrics.preference_accuracy||0)*100).toFixed(1)}%` : `EM: ${((afterMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((afterMetrics.avg_token_f1||0)*100).toFixed(1)}% | R-L: ${((afterMetrics.avg_rouge_l||0)*100).toFixed(1)}%`) : '无数据'}
                         </div>
                     </div>
                 </div>

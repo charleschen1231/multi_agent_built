@@ -276,6 +276,7 @@ class DistillationValidator:
 
             report['agent_results'] = all_agent_results
             report['summary'] = {
+                'mode': 'sft',
                 'avg_before_score': round(avg_before, 4),
                 'avg_after_score': round(avg_after, 4),
                 'avg_improvement': round(avg_improvement, 4),
@@ -996,6 +997,7 @@ class DistillationValidator:
             
             report['agent_results'] = all_agent_results
             report['summary'] = {
+                'mode': 'dpo',
                 'avg_before_score': round(avg_before, 4),
                 'avg_after_score': round(avg_after, 4),
                 'avg_improvement': round(avg_improvement, 4),
