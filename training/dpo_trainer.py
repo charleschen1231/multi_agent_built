@@ -417,31 +417,135 @@ class DPOTrainer:
             agent_names = [a.get('agent_id') for a in trainable_agents]
             log_callback(f"找到 {len(trainable_agents)} 个可训练 DPO Agent: {agent_names}")
         
+        # 检查数据集是否是纯 DPO 格式（包含 chosen/rejected）
+        is_pure_dpo = self._is_pure_dpo_dataset(dataset_file)
+        
         result = {}
-        for agent in trainable_agents:
-            agent_id = agent.get('agent_id', 'unknown')
-            output_file = os.path.join(output_dir, f"{agent_id}_dpo.jsonl")
-            
-            try:
-                data_file = self.prepare_agent_dpo_data(
-                    agent_config=agent,
-                    dataset_file=dataset_file,
-                    trajectory_file=trajectory_file,
-                    output_file=output_file,
-                    log_callback=log_callback
-                )
-                result[agent_id] = {
-                    'data_file': data_file,
-                    'agent_config': agent
-                }
-            except Exception as e:
+        if is_pure_dpo:
+            # 纯 DPO 格式：直接按 agent_id 分割
+            if log_callback:
+                log_callback("检测到纯 DPO 数据集格式，按 agent_id 分割...")
+            result = self._split_pure_dpo_by_agent(
+                config_json=trainable_agents,
+                dataset_file=dataset_file,
+                output_dir=output_dir,
+                log_callback=log_callback
+            )
+        else:
+            # SFT 格式：需要生成偏好对
+            if log_callback:
+                log_callback("检测到 SFT 数据集格式，生成 DPO 偏好对...")
+            for agent in trainable_agents:
+                agent_id = agent.get('agent_id', 'unknown')
+                output_file = os.path.join(output_dir, f"{agent_id}_dpo.jsonl")
+                
+                try:
+                    data_file = self.prepare_agent_dpo_data(
+                        agent_config=agent,
+                        dataset_file=dataset_file,
+                        trajectory_file=trajectory_file,
+                        output_file=output_file,
+                        log_callback=log_callback
+                    )
+                    result[agent_id] = {
+                        'data_file': data_file,
+                        'agent_config': agent
+                    }
+                except Exception as e:
+                    if log_callback:
+                        log_callback(f"[{agent_id}] 数据生成失败: {str(e)}")
+                    result[agent_id] = {
+                        'data_file': None,
+                        'agent_config': agent,
+                        'error': str(e)
+                    }
+        
+        return result
+    
+    def _is_pure_dpo_dataset(self, dataset_file: str) -> bool:
+        """
+        检查数据集是否是纯 DPO 格式（包含 chosen/rejected 字段）
+        
+        Args:
+            dataset_file: 数据集文件路径
+        
+        Returns:
+            bool: True 如果是纯 DPO 格式
+        """
+        try:
+            with open(dataset_file, 'r', encoding='utf-8') as f:
+                first_line = f.readline().strip()
+                if not first_line:
+                    return False
+                sample = json.loads(first_line)
+                return 'chosen' in sample and 'rejected' in sample
+        except Exception:
+            return False
+    
+    def _split_pure_dpo_by_agent(
+        self,
+        config_json: List[Dict],
+        dataset_file: str,
+        output_dir: str,
+        log_callback: callable = None
+    ) -> Dict[str, Dict]:
+        """
+        将纯 DPO 数据集按 agent_id 分割成多个文件
+        
+        Args:
+            config_json: Agent 配置列表
+            dataset_file: DPO 数据集文件
+            output_dir: 输出目录
+            log_callback: 日志回调
+        
+        Returns:
+            Dict: {agent_id: {"data_file": path, "agent_config": config}}
+        """
+        result = {}
+        
+        # 读取所有样本并按 agent_id 分组
+        samples_by_agent = {}
+        with open(dataset_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                sample = json.loads(line)
+                agent_id = sample.get('metadata', {}).get('agent_id')
+                if not agent_id:
+                    continue
+                if agent_id not in samples_by_agent:
+                    samples_by_agent[agent_id] = []
+                samples_by_agent[agent_id].append(sample)
+        
+        # 为每个 agent 生成独立文件
+        for agent in config_json:
+            agent_id = agent.get('agent_id', '')
+            if agent_id not in samples_by_agent:
                 if log_callback:
-                    log_callback(f"[{agent_id}] 数据生成失败: {str(e)}")
+                    log_callback(f"[{agent_id}] 数据集中没有该 agent 的样本，跳过")
                 result[agent_id] = {
                     'data_file': None,
                     'agent_config': agent,
-                    'error': str(e)
+                    'error': f'数据集中没有 agent_id={agent_id} 的样本'
                 }
+                continue
+            
+            output_file = os.path.join(output_dir, f"{agent_id}_dpo.jsonl")
+            samples = samples_by_agent[agent_id]
+            
+            # 写入文件
+            with open(output_file, 'w', encoding='utf-8') as f:
+                for sample in samples:
+                    f.write(json.dumps(sample, ensure_ascii=False) + '\n')
+            
+            if log_callback:
+                log_callback(f"[{agent_id}] 生成了 {len(samples)} 个 DPO 偏好对 -> {output_file}")
+            
+            result[agent_id] = {
+                'data_file': output_file,
+                'agent_config': agent
+            }
         
         return result
     
