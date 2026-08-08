@@ -482,6 +482,42 @@ class DPOTrainer:
         except Exception:
             return False
     
+    def _convert_to_swift_dpo_format(self, sample: Dict) -> Dict:
+        """
+        将 DPO 数据转换为 ms-swift 4.4.2 兼容格式。
+        
+        ms-swift DPO 要求: {"messages": [{"role": "user", "content": ...}], "chosen": ..., "rejected": ...}
+        兼容旧格式: {"instruction": ..., "input": ..., "chosen": ..., "rejected": ...}
+        """
+        # 如果已有 messages 字段且格式正确，直接返回
+        if 'messages' in sample:
+            return sample
+        
+        # 转换 instruction/input 格式为 messages 格式
+        instruction = sample.get('instruction', '')
+        input_text = sample.get('input', '')
+        
+        # 构建 user content
+        if instruction and input_text:
+            user_content = f"{instruction}\n{input_text}"
+        elif instruction:
+            user_content = instruction
+        elif input_text:
+            user_content = input_text
+        else:
+            user_content = ''
+        
+        result = {
+            'messages': [{'role': 'user', 'content': user_content}],
+            'chosen': sample.get('chosen', ''),
+            'rejected': sample.get('rejected', ''),
+        }
+        # 保留 metadata
+        if 'metadata' in sample:
+            result['metadata'] = sample['metadata']
+        
+        return result
+
     def _split_pure_dpo_by_agent(
         self,
         config_json: List[Dict],
@@ -518,7 +554,7 @@ class DPOTrainer:
                     samples_by_agent[agent_id] = []
                 samples_by_agent[agent_id].append(sample)
         
-        # 为每个 agent 生成独立文件
+        # 为每个 agent 生成独立文件（转换为 ms-swift 格式）
         for agent in config_json:
             agent_id = agent.get('agent_id', '')
             if agent_id not in samples_by_agent:
@@ -534,10 +570,11 @@ class DPOTrainer:
             output_file = os.path.join(output_dir, f"{agent_id}_dpo.jsonl")
             samples = samples_by_agent[agent_id]
             
-            # 写入文件
+            # 写入文件（自动转换为 ms-swift DPO 格式）
             with open(output_file, 'w', encoding='utf-8') as f:
                 for sample in samples:
-                    f.write(json.dumps(sample, ensure_ascii=False) + '\n')
+                    converted = self._convert_to_swift_dpo_format(sample)
+                    f.write(json.dumps(converted, ensure_ascii=False) + '\n')
             
             if log_callback:
                 log_callback(f"[{agent_id}] 生成了 {len(samples)} 个 DPO 偏好对 -> {output_file}")
@@ -625,7 +662,6 @@ class DPOTrainer:
                 'gradient_accumulation_steps': 4,
                 'save_steps': 100,
                 'logging_steps': 10,
-                'fp16': True,
                 'use_lora': True,
                 'lora_rank': 8,
                 'lora_alpha': 32,
@@ -649,10 +685,10 @@ class DPOTrainer:
                 log_callback(f"Dataset: {data_file}")
                 log_callback(f"Hyperparameters: {default_params}")
             
-            # Build swift rlhf command with DPO type
+            # Build swift rlhf command (DPO is default, no need to specify --rlhf_type)
+            # Note: rlhf_type field is Literal type, HfArgumentParser cannot parse it from CLI
             cmd = [
                 'swift', 'rlhf',
-                '--rlhf_type', 'dpo',
                 '--model', model_path,
                 '--ref_model', ref_model_path,
                 '--dataset', data_file,
@@ -670,9 +706,9 @@ class DPOTrainer:
                 '--lr_scheduler_type', 'cosine',
             ]
             
-            if default_params.get('fp16'):
-                cmd.extend(['--fp16', 'true'])
-                cmd.extend(['--bf16', 'false'])
+            # 使用 bf16（现代 GPU 默认），与模型 dtype 保持一致
+            # 避免 fp16 与 bfloat16 模型冲突
+            cmd.extend(['--bf16', 'true'])
             
             if default_params.get('use_lora'):
                 cmd.extend([
@@ -824,6 +860,10 @@ class DPOTrainer:
         """
         import time
         
+        # 如果没有提供 log_callback，使用默认 print 输出，确保错误信息可见
+        if log_callback is None:
+            log_callback = lambda msg: print(msg)
+        
         if log_callback:
             log_callback("=" * 60)
             log_callback("System-Level Multi-Agent DPO Training")
@@ -958,9 +998,17 @@ class DPOTrainer:
                         log_callback(f"[{agent_id}] ✅ DPO 训练完成 (耗时 {elapsed/60:.1f} 分钟)")
                 else:
                     failed_count += 1
-                    agent_result['error'] = result.get('message', 'Unknown error')
+                    error_msg = result.get('message', 'Unknown error')
+                    error_log = result.get('error_log', '')
+                    agent_result['error'] = error_msg
+                    if error_log:
+                        agent_result['error_log'] = error_log
                     if log_callback:
-                        log_callback(f"[{agent_id}] ❌ DPO 训练失败: {result.get('message')}")
+                        log_callback(f"[{agent_id}] ❌ DPO 训练失败: {error_msg}")
+                        if error_log:
+                            log_callback(f"[{agent_id}] 错误详情 (最后20行):")
+                            for line in error_log.split('\n')[-20:]:
+                                log_callback(f"  {line}")
                 
                 agent_results.append(agent_result)
                 
