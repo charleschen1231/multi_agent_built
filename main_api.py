@@ -1194,13 +1194,24 @@ async def validate_training_job(
         teacher_file = request_data.get('teacher_trajectory_file')
         
         # If no trajectory file, try to find SFT training output files
-        if not student_file and job.output_dir:
-            sft_output_dir = job.output_dir
-            # Also check system_sft subdirectory
-            system_sft_dir = os.path.join(os.path.dirname(sft_output_dir), 'system_sft', os.path.basename(sft_output_dir))
-            search_dirs = [sft_output_dir]
-            if os.path.exists(system_sft_dir):
-                search_dirs.append(system_sft_dir)
+        if not student_file:
+            search_dirs = []
+            # 1. Check job.output_dir (ms-swift training output)
+            if job.output_dir and os.path.exists(job.output_dir):
+                search_dirs.append(job.output_dir)
+            # 2. Check system_sft directory where prepare_all_agents_sft_data saves files
+            system_sft_base = os.path.join('training_outputs', 'sft', 'system_sft')
+            if os.path.exists(system_sft_base):
+                # Find the most recent run directory
+                run_dirs = sorted(
+                    [d for d in os.listdir(system_sft_base) if d.startswith('run_')],
+                    reverse=True
+                )
+                if run_dirs:
+                    search_dirs.append(os.path.join(system_sft_base, run_dirs[0]))
+                # Also search all run subdirectories
+                for run_dir in run_dirs:
+                    search_dirs.append(os.path.join(system_sft_base, run_dir))
             
             for search_dir in search_dirs:
                 if os.path.exists(search_dir):
