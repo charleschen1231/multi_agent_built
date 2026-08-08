@@ -1,104 +1,104 @@
-[
-  {
-    "agent_id": "planner",
-    "model": {
-      "name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"
-    },
-    "instruction_prompt": {
-      "instruction": "你是 Planner Agent：负责将用户的数学问题拆解为清晰的解题步骤计划。请输出结构化的解题计划。",
-      "prompt_template": "用户的数学问题：{{input.user_request}}\n\n请输出你的解题计划（分步骤列出）："
-    },
-    "input": [
-      { "from": "user", "key": "user_request" }
-    ],
-    "output": [
-      { "key": "plan", "to": [ { "agent": "infer", "as": "plan" } ] }
-    ],
-    "training": {
-      "mode": "dpo",
-      "trainable": true,
-      "ground_truth": {
-        "gt_key": "plan_gt"
+{
+  "name": "system_dpo_test",
+  "description": "System-level DPO training for 3-agent pipeline (planner -> infer -> checker)",
+  "version": "1.0",
+  
+  "agents": [
+    {
+      "agent_id": "planner",
+      "name": "PlanAgent",
+      "description": "制定解题计划",
+      "model": {
+        "name_or_path": "/root/autodl-tmp/models/Qwen2.5-0.5B-Instruct",
+        "api_key": "",
+        "base_url": ""
       },
-      "loss": {
-        "type": "dpo",
-        "weight": 1.0
+      "instruction_prompt": {
+        "instruction": "你是一个专业的解题规划师。请为用户问题制定清晰的解题步骤。",
+        "prompt_template": "问题：{{input.user_request}}\n\n请制定解题计划："
       },
-      "train_parameters": {
-        "lr": 5e-7,
-        "beta": 0.1,
-        "num_epochs": 3,
-        "batch_size": 2
+      "input": [
+        {"key": "user_request", "from": "user"}
+      ],
+      "training": {
+        "trainable": true,
+        "mode": "dpo",
+        "ground_truth": {
+          "gt_key": "plan_gt"
+        }
+      }
+    },
+    {
+      "agent_id": "infer",
+      "name": "InferAgent",
+      "description": "执行推理计算",
+      "model": {
+        "name_or_path": "/root/autodl-tmp/models/Qwen2.5-0.5B-Instruct",
+        "api_key": "",
+        "base_url": ""
+      },
+      "instruction_prompt": {
+        "instruction": "你是一个数学推理专家。请根据计划逐步解答问题。",
+        "prompt_template": "问题：{{input.user_request}}\n计划：{{input.plan_output}}\n\n请解答："
+      },
+      "input": [
+        {"key": "user_request", "from": "user"},
+        {"key": "plan_output", "from": "planner"}
+      ],
+      "training": {
+        "trainable": true,
+        "mode": "dpo",
+        "ground_truth": {
+          "gt_key": "draft_answer_gt"
+        }
+      }
+    },
+    {
+      "agent_id": "checker",
+      "name": "CheckerAgent",
+      "description": "检查答案正确性",
+      "model": {
+        "name_or_path": "/root/autodl-tmp/models/Qwen2.5-0.5B-Instruct",
+        "api_key": "",
+        "base_url": ""
+      },
+      "instruction_prompt": {
+        "instruction": "你是一个答案验证专家。请检查推理结果是否正确。",
+        "prompt_template": "问题：{{input.user_request}}\n推理：{{input.infer_output}}\n\n请验证："
+      },
+      "input": [
+        {"key": "user_request", "from": "user"},
+        {"key": "infer_output", "from": "infer"}
+      ],
+      "training": {
+        "trainable": true,
+        "mode": "dpo",
+        "ground_truth": {
+          "gt_key": "final_answer_gt"
+        }
       }
     }
-  },
-  {
-    "agent_id": "infer",
-    "model": {
-      "name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"
-    },
-    "instruction_prompt": {
-      "instruction": "你是 Inference Agent：根据 Planner 提供的解题计划，对用户的数学问题进行详细计算，得出答案。",
-      "prompt_template": "解题计划：{{input.plan}}\n\n用户的数学问题：{{input.user_request}}\n\n请按照计划逐步计算并给出答案："
-    },
-    "input": [
-      { "from": "user", "key": "user_request" },
-      { "from": "planner", "key": "plan" }
-    ],
-    "output": [
-      { "key": "draft_answer", "to": [ { "agent": "checker", "as": "draft_answer" } ] }
-    ],
-    "training": {
-      "mode": "dpo",
-      "trainable": true,
-      "ground_truth": {
-        "gt_key": "draft_answer_gt"
-      },
-      "loss": {
-        "type": "dpo",
-        "weight": 1.0
-      },
-      "train_parameters": {
-        "lr": 5e-7,
-        "beta": 0.1,
-        "num_epochs": 3,
-        "batch_size": 2
-      }
-    }
-  },
-  {
-    "agent_id": "checker",
-    "model": {
-      "name_or_path": "Qwen/Qwen2.5-0.5B-Instruct"
-    },
-    "instruction_prompt": {
-      "instruction": "你是 Checker Agent：检查计算过程和答案是否正确，验证无误后给出最终答案。如果发现问题请指出并修正。",
-      "prompt_template": "用户的数学问题：{{input.user_request}}\n候选答案：{{input.draft_answer}}\n\n请检查答案是否正确，并给出最终结果："
-    },
-    "input": [
-      { "from": "user", "key": "user_request" },
-      { "from": "infer", "key": "draft_answer" }
-    ],
-    "output": [
-      { "key": "final_answer", "to": [ { "user": true } ] },
-      { "key": "verdict", "to": [ { "user": true } ] }
-    ],
-    "training": {
-      "mode": "dpo",
-      "trainable": true,
-      "ground_truth": {
-        "gt_key": "final_answer_gt"
-      },
-      "loss": {
-        "type": "dpo",
-        "weight": 1.0
-      },
-      "train_parameters": {
-        "lr": 5e-7,
-        "beta": 0.1,
-        "num_epochs": 3,
-        "batch_size": 2
-      }
+  ],
+  
+  "training_config": {
+    "output_dir": "./training_outputs/dpo",
+    "num_train_epochs": 3,
+    "per_device_train_batch_size": 2,
+    "gradient_accumulation_steps": 4,
+    "learning_rate": 5e-6,
+    "warmup_ratio": 0.1,
+    "logging_steps": 10,
+    "save_steps": 100,
+    "evaluation_strategy": "no",
+    "report_to": ["tensorboard"],
+    
+    "swift_params": {
+      "model_type": "qwen2",
+      "dataset": "./data/dpo_dataset.jsonl",
+      "dataset_val_ratio": 0.1,
+      "max_length": 512,
+      "beta": 0.1,
+      "loss_type": "sigmoid"
     }
   }
-]
+}
