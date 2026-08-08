@@ -568,16 +568,29 @@ class DistillationValidator:
         return None
 
     def _find_checkpoint(self, output_dir: str) -> Optional[str]:
-        """在训练输出目录中查找最新的 checkpoint"""
-        # 先检查 v0-* 子目录（ms-swift 输出格式）
+        """在训练输出目录中查找最新的 checkpoint
+        
+        Args:
+            output_dir: 可能是 checkpoint 目录本身，也可能是其父目录
+        Returns:
+            checkpoint 路径，未找到返回 None
+        """
+        if not output_dir or not os.path.exists(output_dir):
+            return None
+        
+        # 情况1：output_dir 本身就是 checkpoint 目录（包含 adapter_config.json 或 config.json）
+        if os.path.exists(os.path.join(output_dir, 'adapter_config.json')) or \
+           os.path.exists(os.path.join(output_dir, 'config.json')):
+            return output_dir
+        
+        # 情况2：在 output_dir 的子目录中查找 checkpoint-*
         search_dirs = [output_dir]
 
         # 查找 v0-*, v1-* 等子目录
-        if os.path.exists(output_dir):
-            for d in os.listdir(output_dir):
-                full = os.path.join(output_dir, d)
-                if os.path.isdir(full) and d.startswith('v'):
-                    search_dirs.append(full)
+        for d in os.listdir(output_dir):
+            full = os.path.join(output_dir, d)
+            if os.path.isdir(full) and d.startswith('v'):
+                search_dirs.append(full)
 
         for search_dir in sorted(search_dirs, reverse=True):
             checkpoints = sorted(
