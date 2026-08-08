@@ -649,9 +649,10 @@ class DPOTrainer:
                 log_callback(f"Dataset: {data_file}")
                 log_callback(f"Hyperparameters: {default_params}")
             
-            # Build swift dpo command
+            # Build swift rlhf command with DPO type
             cmd = [
-                'swift', 'dpo',
+                'swift', 'rlhf',
+                '--rlhf_type', 'dpo',
                 '--model', model_path,
                 '--ref_model', ref_model_path,
                 '--dataset', data_file,
