@@ -20,11 +20,22 @@
       "input": [
         {"key": "user_request", "from": "user"}
       ],
+      "output": [
+        {"key": "plan", "to": [{"agent": "infer", "as": "plan"}]}
+      ],
       "training": {
         "trainable": true,
         "mode": "dpo",
+        "dataset": {
+          "input_key": "user_request"
+        },
         "ground_truth": {
+          "output_key": "plan",
           "gt_key": "plan_gt"
+        },
+        "loss": {
+          "type": "dpo",
+          "weight": 1.0
         }
       }
     },
@@ -45,11 +56,22 @@
         {"key": "user_request", "from": "user"},
         {"key": "plan_output", "from": "planner"}
       ],
+      "output": [
+        {"key": "draft_answer", "to": [{"agent": "checker", "as": "draft_answer"}]}
+      ],
       "training": {
         "trainable": true,
         "mode": "dpo",
+        "dataset": {
+          "input_key": "user_request"
+        },
         "ground_truth": {
+          "output_key": "draft_answer",
           "gt_key": "draft_answer_gt"
+        },
+        "loss": {
+          "type": "dpo",
+          "weight": 1.0
         }
       }
     },
@@ -70,11 +92,23 @@
         {"key": "user_request", "from": "user"},
         {"key": "infer_output", "from": "infer"}
       ],
+      "output": [
+        {"key": "final_answer", "to": [{"user": true}]},
+        {"key": "verdict", "to": [{"user": true}]}
+      ],
       "training": {
         "trainable": true,
         "mode": "dpo",
+        "dataset": {
+          "input_key": "user_request"
+        },
         "ground_truth": {
+          "output_key": "final_answer",
           "gt_key": "final_answer_gt"
+        },
+        "loss": {
+          "type": "dpo",
+          "weight": 1.0
         }
       }
     }
