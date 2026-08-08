@@ -486,31 +486,51 @@ class DPOTrainer:
         """
         将 DPO 数据转换为 ms-swift 4.4.2 兼容格式。
         
-        ms-swift DPO 要求: {"messages": [{"role": "user", "content": ...}], "chosen": ..., "rejected": ...}
-        兼容旧格式: {"instruction": ..., "input": ..., "chosen": ..., "rejected": ...}
+        ms-swift 4.4.2 DPO 要求 chosen/rejected 为 messages 格式：
+        {
+            "messages": [{"role": "user", "content": "..."}],
+            "chosen": {"messages": [{"role": "assistant", "content": "..."}]},
+            "rejected": {"messages": [{"role": "assistant", "content": "..."}]}
+        }
         """
-        # 如果已有 messages 字段且格式正确，直接返回
+        # 提取 user messages（保留原始对话上下文）
         if 'messages' in sample:
-            return sample
-        
-        # 转换 instruction/input 格式为 messages 格式
-        instruction = sample.get('instruction', '')
-        input_text = sample.get('input', '')
-        
-        # 构建 user content
-        if instruction and input_text:
-            user_content = f"{instruction}\n{input_text}"
-        elif instruction:
-            user_content = instruction
-        elif input_text:
-            user_content = input_text
+            user_messages = [m for m in sample['messages'] if m.get('role') == 'user']
+            if not user_messages:
+                user_messages = sample['messages'][:1]  # fallback
         else:
-            user_content = ''
+            # 从 instruction/input 构建 user message
+            instruction = sample.get('instruction', '')
+            input_text = sample.get('input', '')
+            if instruction and input_text:
+                user_content = f"{instruction}\n{input_text}"
+            elif instruction:
+                user_content = instruction
+            elif input_text:
+                user_content = input_text
+            else:
+                user_content = ''
+            user_messages = [{'role': 'user', 'content': user_content}]
+        
+        # 将 chosen/rejected 字符串转换为 messages 格式（ms-swift 4.4.2 要求）
+        chosen_text = sample.get('chosen', '')
+        rejected_text = sample.get('rejected', '')
+        
+        # 如果 chosen/rejected 已经是 dict 格式（含 messages），直接使用
+        if isinstance(chosen_text, str):
+            chosen_obj = {'messages': [{'role': 'assistant', 'content': chosen_text}]}
+        else:
+            chosen_obj = chosen_text
+        
+        if isinstance(rejected_text, str):
+            rejected_obj = {'messages': [{'role': 'assistant', 'content': rejected_text}]}
+        else:
+            rejected_obj = rejected_text
         
         result = {
-            'messages': [{'role': 'user', 'content': user_content}],
-            'chosen': sample.get('chosen', ''),
-            'rejected': sample.get('rejected', ''),
+            'messages': user_messages,
+            'chosen': chosen_obj,
+            'rejected': rejected_obj,
         }
         # 保留 metadata
         if 'metadata' in sample:
@@ -799,6 +819,7 @@ class DPOTrainer:
                 
                 return {
                     'status': 'error',
+                    'output_dir': output_dir,
                     'message': error_msg,
                     'error_log': '\n'.join(output_lines[-50:])  # 返回最后 50 行
                 }
