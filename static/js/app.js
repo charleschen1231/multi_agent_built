@@ -2463,7 +2463,7 @@ async function runValidation(jobId) {
                 
                 if (status.status === 'completed' || status.status === 'failed') {
                     completed = true;
-                    if (status.result && status.result.summary) {
+                    if (status.result && typeof status.result === 'object' && status.result.summary) {
                         renderValidationReport(jobId, status.result, status.result);
                     } else if (status.status === 'failed') {
                         const progressDiv = document.getElementById('eval-validation-progress');
