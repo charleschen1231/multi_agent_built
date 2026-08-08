@@ -453,6 +453,9 @@ class DistillationValidator:
     ) -> bool:
         """加载 LoRA 适配器并推理单个 agent"""
         try:
+            if log_callback:
+                log_callback(f"  [{agent_id}] 正在加载 LoRA 模型...")
+            
             loop = asyncio.get_event_loop()
 
             model, tokenizer = await loop.run_in_executor(
@@ -460,7 +463,9 @@ class DistillationValidator:
                 self._load_lora_model,
                 base_model_path, checkpoint_path
             )
-            if model is None:
+            if model is None or tokenizer is None:
+                if log_callback:
+                    log_callback(f"  [{agent_id}] LoRA 模型加载失败: {checkpoint_path}")
                 return False
 
             if log_callback:
