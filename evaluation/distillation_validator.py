@@ -33,16 +33,18 @@ class DistillationValidator:
         config_json: List[Dict],
         dataset_file: str,
         training_results: List[Dict],
-        log_callback: callable = None
+        log_callback: callable = None,
+        mode: str = 'sft'
     ) -> Dict[str, Any]:
         """
         执行三向对比验证。
 
         Args:
             config_json: 系统配置（agent 列表）
-            dataset_file: 数据集文件路径 (JSONL，包含 *_gt 字段)
+            dataset_file: 数据集文件路径 (JSONL)
             training_results: 训练结果列表，每项包含 agent_id, output_dir, model 等
             log_callback: 日志回调
+            mode: 验证模式 ('sft' 或 'dpo')
 
         Returns:
             Dict: 完整的三向对比验证报告
@@ -57,7 +59,17 @@ class DistillationValidator:
         }
 
         try:
-            # ── Phase 1: 提取 Teacher GT ──
+            # ── 根据模式选择验证策略 ──
+            if mode == 'dpo':
+                return await self._validate_dpo(
+                    config_json=config_json,
+                    dataset_file=dataset_file,
+                    training_results=training_results,
+                    log_callback=log_callback
+                )
+            
+            # 默认 SFT 模式（原有逻辑）
+            # ─ Phase 1: 提取 Teacher GT ─
             if log_callback:
                 log_callback("[Phase 1/3] 提取教师模型 Ground Truth...")
             await asyncio.sleep(0)
@@ -759,3 +771,390 @@ class DistillationValidator:
                 torch.cuda.empty_cache()
         except Exception:
             pass
+
+    # ──────────────── DPO 验证逻辑 ────────────────
+
+    async def _validate_dpo(
+        self,
+        config_json: List[Dict],
+        dataset_file: str,
+        training_results: List[Dict],
+        log_callback: callable = None
+    ) -> Dict[str, Any]:
+        """
+        DPO 模式验证：评估偏好对齐效果
+        
+        DPO 验证与 SFT 的区别：
+        - SFT: Teacher GT vs Student Before/After (三向对比)
+        - DPO: Chosen/Rejected 偏好对 + 奖励分数
+        
+        Args:
+            config_json: 系统配置（agent 列表）
+            dataset_file: DPO 数据集文件路径 (JSONL，包含 chosen/rejected 字段)
+            training_results: 训练结果列表
+            log_callback: 日志回调
+        
+        Returns:
+            Dict: DPO 验证报告
+        """
+        timestamp = datetime.now().isoformat()
+        report = {
+            'status': 'running',
+            'timestamp': timestamp,
+            'phases': {},
+            'agent_results': {},
+            'summary': {}
+        }
+        
+        try:
+            # ─ Phase 1: 提取 DPO 偏好对 ─
+            if log_callback:
+                log_callback("[Phase 1/3] 提取 DPO 偏好对 (Chosen/Rejected)...")
+            await asyncio.sleep(0)
+            
+            dpo_pairs = self._extract_dpo_preferences(config_json, dataset_file)
+            report['phases']['dpo_pairs'] = {
+                'status': 'completed',
+                'pair_count': len(next(iter(dpo_pairs.values()), []))
+            }
+            if log_callback:
+                for aid, pairs in dpo_pairs.items():
+                    log_callback(f"  [{aid}] {len(pairs)} 个偏好对")
+            
+            # ─ Phase 2: 基座模型推理 ─
+            if log_callback:
+                log_callback("[Phase 2/3] 加载基座模型进行推理 (Student Before)...")
+            await asyncio.sleep(0)
+            
+            # 获取基座模型路径
+            base_model = None
+            for tr in (training_results or []):
+                m = tr.get('model', '')
+                if m and not m.startswith('./training_outputs') and not m.startswith('training_outputs'):
+                    base_model = m
+                    break
+            if not base_model:
+                base_model = config_json[0].get('model', {}).get(
+                    'name_or_path', 'Qwen/Qwen2.5-0.5B-Instruct'
+                ) if config_json else 'Qwen/Qwen2.5-0.5B-Instruct'
+            if base_model.startswith('./training_outputs') or base_model.startswith('training_outputs'):
+                base_model = 'Qwen/Qwen2.5-0.5B-Instruct'
+            
+            base_outputs = await self._run_model_inference(
+                config_json=config_json,
+                dataset_file=dataset_file,
+                model_path=base_model,
+                teacher_outputs=dpo_pairs,  # 复用结构
+                log_callback=log_callback,
+                model_label="基座模型"
+            )
+            
+            report['phases']['student_before'] = {
+                'status': 'completed' if base_outputs else 'failed',
+                'model': base_model,
+                'sample_count': len(next(iter(base_outputs.values()), [])) if base_outputs else 0
+            }
+            
+            # ─ Phase 3: DPO 微调模型推理 ─
+            if log_callback:
+                log_callback("[Phase 3/3] 加载 DPO 微调模型进行推理 (Student After)...")
+            await asyncio.sleep(0)
+            
+            dpo_outputs = {}
+            dpo_ok = False
+            
+            for agent in config_json:
+                training = agent.get('training', {})
+                if not (training.get('trainable') and training.get('mode') == 'dpo'):
+                    continue
+                
+                agent_id = agent.get('agent_id', '')
+                output_dir = None
+                for tr in (training_results or []):
+                    if tr.get('agent_id') == agent_id:
+                        output_dir = tr.get('output_dir')
+                        break
+                
+                if not output_dir:
+                    if log_callback:
+                        log_callback(f"  [{agent_id}] 未找到输出目录，跳过")
+                    continue
+                
+                checkpoint = self._find_checkpoint(output_dir)
+                if not checkpoint:
+                    if log_callback:
+                        log_callback(f"  [{agent_id}] 未找到 checkpoint，跳过")
+                    continue
+                
+                ok = await self._run_lora_inference(
+                    agent_id=agent_id,
+                    base_model_path=base_model,
+                    checkpoint_path=checkpoint,
+                    config_json=config_json,
+                    dataset_file=dataset_file,
+                    teacher_outputs=dpo_pairs,
+                    output_dict=dpo_outputs,
+                    log_callback=log_callback
+                )
+                if ok:
+                    dpo_ok = True
+            
+            report['phases']['student_after'] = {
+                'status': 'completed' if dpo_ok else 'failed',
+                'sample_count': len(next(iter(dpo_outputs.values()), [])) if dpo_ok else 0
+            }
+            
+            # ─ DPO 评估 ─
+            if log_callback:
+                log_callback("\n[Evaluation] DPO 偏好对齐评估...")
+            await asyncio.sleep(0)
+            
+            all_agent_results = {}
+            
+            for agent_id in set(list(dpo_pairs.keys()) + list(base_outputs.keys()) + list(dpo_outputs.keys())):
+                pairs = dpo_pairs.get(agent_id, [])
+                b_outs = base_outputs.get(agent_id, [])
+                d_outs = dpo_outputs.get(agent_id, [])
+                
+                n = min(len(pairs), max(len(b_outs), len(d_outs), 1))
+                pairs = pairs[:n]
+                
+                agent_result = {'agent_id': agent_id, 'sample_count': n}
+                
+                # Before vs Chosen
+                if b_outs:
+                    b_outs = b_outs[:n]
+                    before_metrics = self._evaluate_dpo_metrics(
+                        predictions=b_outs,
+                        chosen=[p.get('chosen', '') for p in pairs],
+                        rejected=[p.get('rejected', '') for p in pairs]
+                    )
+                    agent_result['before'] = {
+                        'metrics': before_metrics,
+                        'outputs': b_outs[:5]
+                    }
+                else:
+                    agent_result['before'] = None
+                
+                # After vs Chosen
+                if d_outs:
+                    d_outs = d_outs[:n]
+                    after_metrics = self._evaluate_dpo_metrics(
+                        predictions=d_outs,
+                        chosen=[p.get('chosen', '') for p in pairs],
+                        rejected=[p.get('rejected', '') for p in pairs]
+                    )
+                    agent_result['after'] = {
+                        'metrics': after_metrics,
+                        'outputs': d_outs[:5]
+                    }
+                else:
+                    agent_result['after'] = None
+                
+                # 计算提升幅度
+                before_score = before_metrics.get('chosen_alignment_score', 0) if before_metrics else 0
+                after_score = after_metrics.get('chosen_alignment_score', 0) if after_metrics else 0
+                
+                agent_result['improvement'] = {
+                    'absolute': round(after_score - before_score, 4),
+                    'relative': round((after_score - before_score) / max(before_score, 0.001), 4),
+                    'before_score': round(before_score, 4),
+                    'after_score': round(after_score, 4)
+                }
+                
+                # 保存示例偏好对
+                agent_result['preference_samples'] = [
+                    {
+                        'chosen': p.get('chosen', ''),
+                        'rejected': p.get('rejected', '')
+                    } for p in pairs[:5]
+                ]
+                
+                all_agent_results[agent_id] = agent_result
+                
+                if log_callback:
+                    imp = agent_result['improvement']
+                    log_callback(
+                        f"  [{agent_id}] Before={imp['before_score']:.2%} "
+                        f"→ After={imp['after_score']:.2%} "
+                        f"(Δ{imp['absolute']:+.2%})"
+                    )
+            
+            # 汇总
+            before_scores = [r['improvement']['before_score'] for r in all_agent_results.values()]
+            after_scores = [r['improvement']['after_score'] for r in all_agent_results.values()]
+            improvements = [r['improvement']['absolute'] for r in all_agent_results.values()]
+            
+            avg_before = sum(before_scores) / len(before_scores) if before_scores else 0
+            avg_after = sum(after_scores) / len(after_scores) if after_scores else 0
+            avg_improvement = sum(improvements) / len(improvements) if improvements else 0
+            
+            report['agent_results'] = all_agent_results
+            report['summary'] = {
+                'avg_before_score': round(avg_before, 4),
+                'avg_after_score': round(avg_after, 4),
+                'avg_improvement': round(avg_improvement, 4),
+                'agents_evaluated': len(all_agent_results),
+                'quality_grade': self.evaluator._compute_quality_grade(avg_after),
+                'best_agent': max(
+                    all_agent_results.keys(),
+                    key=lambda a: all_agent_results[a]['improvement']['after_score']
+                ) if all_agent_results else None,
+                'most_improved_agent': max(
+                    all_agent_results.keys(),
+                    key=lambda a: all_agent_results[a]['improvement']['absolute']
+                ) if all_agent_results else None,
+            }
+            report['status'] = 'completed'
+            
+            if log_callback:
+                log_callback(f"\n{'=' * 60}")
+                log_callback(f"DPO 验证完成")
+                log_callback(f"  基座模型平均得分: {avg_before:.2%}")
+                log_callback(f"  微调模型平均得分: {avg_after:.2%}")
+                log_callback(f"  平均提升幅度: {avg_improvement:+.2%}")
+                log_callback(f"  质量等级: {report['summary']['quality_grade']}")
+                log_callback(f"{'=' * 60}")
+            
+            # 保存报告
+            report_file = os.path.join(
+                self.output_dir,
+                f"validation_dpo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            with open(report_file, 'w', encoding='utf-8') as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+            report['report_file'] = report_file
+            
+            return report
+            
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            if log_callback:
+                log_callback(f"\n❌ DPO 验证失败: {str(e)}")
+                log_callback(error_trace)
+            report['status'] = 'failed'
+            report['error'] = str(e)
+            report['traceback'] = error_trace
+            return report
+
+    def _extract_dpo_preferences(
+        self,
+        config_json: List[Dict],
+        dataset_file: str
+    ) -> Dict[str, List[Dict]]:
+        """
+        从 DPO 数据集提取偏好对
+        
+        Args:
+            config_json: 系统配置
+            dataset_file: DPO 数据集文件 (JSONL，包含 chosen/rejected 字段)
+        
+        Returns:
+            Dict[agent_id, List[pair]]: 按 agent 分组的偏好对
+        """
+        preferences = {}
+        
+        # 初始化每个 trainable DPO agent
+        for agent in config_json:
+            training = agent.get('training', {})
+            if training.get('trainable') and training.get('mode') == 'dpo':
+                agent_id = agent.get('agent_id', '')
+                preferences[agent_id] = []
+        
+        # 读取数据集
+        with open(dataset_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                sample = json.loads(line)
+                
+                # 支持两种格式：
+                # 1. 直接包含 chosen/rejected
+                # 2. 包含 metadata.agent_id
+                agent_id = sample.get('metadata', {}).get('agent_id')
+                if not agent_id:
+                    # 尝试从所有 agent 中匹配
+                    for agent in config_json:
+                        training = agent.get('training', {})
+                        if training.get('trainable') and training.get('mode') == 'dpo':
+                            agent_id = agent.get('agent_id', '')
+                            break
+                
+                if agent_id and agent_id in preferences:
+                    pair = {
+                        'chosen': sample.get('chosen', ''),
+                        'rejected': sample.get('rejected', ''),
+                        'instruction': sample.get('instruction', ''),
+                        'input': sample.get('input', '')
+                    }
+                    preferences[agent_id].append(pair)
+        
+        return preferences
+
+    def _evaluate_dpo_metrics(
+        self,
+        predictions: List[str],
+        chosen: List[str],
+        rejected: List[str]
+    ) -> Dict[str, float]:
+        """
+        计算 DPO 评估指标
+        
+        Args:
+            predictions: 模型预测输出
+            chosen: 教师选择的优质回答
+            rejected: 教师拒绝的低质回答
+        
+        Returns:
+            Dict: DPO 指标
+                - chosen_alignment_score: 与 chosen 的对齐度 (0-1)
+                - rejection_rate: 正确拒绝 rejected 的比例
+                - preference_accuracy: 偏好准确率
+        """
+        if not predictions or not chosen:
+            return {
+                'chosen_alignment_score': 0.0,
+                'rejection_rate': 0.0,
+                'preference_accuracy': 0.0
+            }
+        
+        n = min(len(predictions), len(chosen), len(rejected))
+        predictions = predictions[:n]
+        chosen = chosen[:n]
+        rejected = rejected[:n]
+        
+        # 计算与 chosen 的对齐度（使用 evaluator 的现有方法）
+        alignment_scores = []
+        for pred, ch in zip(predictions, chosen):
+            # 使用简单的字符串相似度作为对齐度
+            from evaluation.evaluator import SystemEvaluator
+            score = SystemEvaluator._token_f1(pred, ch)
+            alignment_scores.append(score)
+        
+        chosen_alignment = sum(alignment_scores) / len(alignment_scores) if alignment_scores else 0
+        
+        # 计算拒绝率：预测与 rejected 的相似度应该低
+        rejection_scores = []
+        for pred, rej in zip(predictions, rejected):
+            sim = SystemEvaluator._token_f1(pred, rej)
+            rejection_scores.append(1 - sim)  # 越低越好，所以取反
+        
+        rejection_rate = sum(rejection_scores) / len(rejection_scores) if rejection_scores else 0
+        
+        # 偏好准确率：预测更接近 chosen 而非 rejected
+        correct_prefs = 0
+        for pred, ch, rej in zip(predictions, chosen, rejected):
+            sim_chosen = SystemEvaluator._token_f1(pred, ch)
+            sim_rejected = SystemEvaluator._token_f1(pred, rej)
+            if sim_chosen > sim_rejected:
+                correct_prefs += 1
+        
+        preference_accuracy = correct_prefs / n if n > 0 else 0
+        
+        return {
+            'chosen_alignment_score': round(chosen_alignment, 4),
+            'rejection_rate': round(rejection_rate, 4),
+            'preference_accuracy': round(preference_accuracy, 4)
+        }
