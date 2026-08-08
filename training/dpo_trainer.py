@@ -708,6 +708,8 @@ class DPOTrainer:
                 }, f, ensure_ascii=False, indent=2)
             
             # Execute via subprocess
+            output_lines = []  # 保存所有输出行
+            
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -720,6 +722,7 @@ class DPOTrainer:
                 for line in iter(process.stdout.readline, ''):
                     if line:
                         stripped = line.strip()
+                        output_lines.append(stripped)  # 保存输出
                         if log_callback:
                             log_callback(stripped)
                         # Parse metrics from output
@@ -742,11 +745,25 @@ class DPOTrainer:
                 }
             else:
                 error_msg = f'DPO Training failed with return code: {process.returncode}'
+                # 保存完整错误日志到文件
+                error_log_file = os.path.join(output_dir, 'error.log')
+                with open(error_log_file, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(output_lines))
+                
                 if log_callback:
                     log_callback(error_msg)
+                    log_callback(f"完整错误日志已保存: {error_log_file}")
+                    # 打印最后 20 行错误信息
+                    last_lines = output_lines[-20:] if len(output_lines) > 20 else output_lines
+                    if last_lines:
+                        log_callback("最后 20 行错误输出:")
+                        for line in last_lines:
+                            log_callback(f"  {line}")
+                
                 return {
                     'status': 'error',
-                    'message': error_msg
+                    'message': error_msg,
+                    'error_log': '\n'.join(output_lines[-50:])  # 返回最后 50 行
                 }
         
         except FileNotFoundError:
