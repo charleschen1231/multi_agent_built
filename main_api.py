@@ -1209,12 +1209,16 @@ async def validate_training_job(
                 })
         
         # Run validation in background
+        # Determine mode from job type
+        mode = 'dpo' if job.type == 'dpo' else 'sft'
+        
         asyncio.create_task(
             _run_validation_background(
                 validation_key=validation_key,
                 config_json=config.config_json,
                 dataset_file=dataset.file_path,
-                training_results=training_results
+                training_results=training_results,
+                mode=mode
             )
         )
         
@@ -1233,7 +1237,8 @@ async def _run_validation_background(
     validation_key: str,
     config_json: List[Dict],
     dataset_file: str,
-    training_results: List[Dict]
+    training_results: List[Dict],
+    mode: str = 'sft'
 ):
     """Background task for validation"""
     def log_cb(msg):
@@ -1250,7 +1255,8 @@ async def _run_validation_background(
             config_json=config_json,
             dataset_file=dataset_file,
             training_results=training_results,
-            log_callback=log_cb
+            log_callback=log_cb,
+            mode=mode
         )
         _validation_status[validation_key]['result'] = result
         _validation_status[validation_key]['status'] = result.get('status', 'completed')
