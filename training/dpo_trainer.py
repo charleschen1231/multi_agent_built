@@ -486,20 +486,19 @@ class DPOTrainer:
         """
         将 DPO 数据转换为 ms-swift 4.4.2 兼容格式。
         
-        ms-swift 4.4.2 DPO 要求 chosen/rejected 为 messages 格式：
-        {
-            "messages": [{"role": "user", "content": "..."}],
-            "chosen": {"messages": [{"role": "assistant", "content": "..."}]},
-            "rejected": {"messages": [{"role": "assistant", "content": "..."}]}
-        }
+        ms-swift 4.4.2 DPO 数据格式（通过源码分析 TemplateInputs.from_dict 确认）：
+        - messages: 共享对话上下文（user turns）
+        - chosen: {"messages": [{"role": "assistant", "content": "偏好回复"}]}
+        - rejected_response: "被拒绝的回复"（字符串，由 _compat_rejected_response 处理）
+        
+        注意：不能用 "rejected" 字段（需要 rejected_ 前缀的 key 才能被解析）
         """
-        # 提取 user messages（保留原始对话上下文）
+        # 提取 user messages（共享对话上下文）
         if 'messages' in sample:
             user_messages = [m for m in sample['messages'] if m.get('role') == 'user']
             if not user_messages:
-                user_messages = sample['messages'][:1]  # fallback
+                user_messages = sample['messages'][:1]
         else:
-            # 从 instruction/input 构建 user message
             instruction = sample.get('instruction', '')
             input_text = sample.get('input', '')
             if instruction and input_text:
@@ -512,27 +511,26 @@ class DPOTrainer:
                 user_content = ''
             user_messages = [{'role': 'user', 'content': user_content}]
         
-        # 将 chosen/rejected 字符串转换为 messages 格式（ms-swift 4.4.2 要求）
-        chosen_text = sample.get('chosen', '')
-        rejected_text = sample.get('rejected', '')
-        
-        # 如果 chosen/rejected 已经是 dict 格式（含 messages），直接使用
-        if isinstance(chosen_text, str):
-            chosen_obj = {'messages': [{'role': 'assistant', 'content': chosen_text}]}
+        # 提取 chosen 文本
+        chosen_val = sample.get('chosen', '')
+        if isinstance(chosen_val, dict):
+            # 已经是 {"messages": [...]} 格式
+            chosen_text = chosen_val.get('messages', [{}])[-1].get('content', '')
         else:
-            chosen_obj = chosen_text
+            chosen_text = str(chosen_val)
         
-        if isinstance(rejected_text, str):
-            rejected_obj = {'messages': [{'role': 'assistant', 'content': rejected_text}]}
+        # 提取 rejected 文本
+        rejected_val = sample.get('rejected', '')
+        if isinstance(rejected_val, dict):
+            rejected_text = rejected_val.get('messages', [{}])[-1].get('content', '')
         else:
-            rejected_obj = rejected_text
+            rejected_text = str(rejected_val)
         
         result = {
             'messages': user_messages,
-            'chosen': chosen_obj,
-            'rejected': rejected_obj,
+            'chosen': {'messages': [{'role': 'assistant', 'content': chosen_text}]},
+            'rejected_response': rejected_text,
         }
-        # 保留 metadata
         if 'metadata' in sample:
             result['metadata'] = sample['metadata']
         
