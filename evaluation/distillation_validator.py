@@ -76,9 +76,20 @@ class DistillationValidator:
                 log_callback("[Phase 2/3] 加载基座模型进行推理 (Student Before)...")
             await asyncio.sleep(0)
 
-            base_model = config_json[0].get('model', {}).get(
-                'name_or_path', 'Qwen/Qwen2.5-0.5B-Instruct'
-            ) if config_json else 'Qwen/Qwen2.5-0.5B-Instruct'
+            # 优先从 training_results 获取基座模型路径（更可靠）
+            base_model = None
+            for tr in (training_results or []):
+                m = tr.get('model', '')
+                if m and not m.startswith('./training_outputs') and not m.startswith('training_outputs'):
+                    base_model = m
+                    break
+            if not base_model:
+                base_model = config_json[0].get('model', {}).get(
+                    'name_or_path', 'Qwen/Qwen2.5-0.5B-Instruct'
+                ) if config_json else 'Qwen/Qwen2.5-0.5B-Instruct'
+            # 如果仍然是训练输出路径，使用默认值
+            if base_model.startswith('./training_outputs') or base_model.startswith('training_outputs'):
+                base_model = 'Qwen/Qwen2.5-0.5B-Instruct'
 
             base_outputs, base_ok = await self._run_model_inference(
                 config_json=config_json,
@@ -118,9 +129,15 @@ class DistillationValidator:
                 if not agent_cfg:
                     continue
 
-                agent_base = agent_cfg.get('model', {}).get(
-                    'name_or_path', 'Qwen/Qwen2.5-0.5B-Instruct'
-                )
+                # 优先使用 training result 的 model 字段作为基座模型路径
+                agent_base = tr.get('model', '') or ''
+                if not agent_base or agent_base.startswith('./training_outputs') or agent_base.startswith('training_outputs'):
+                    agent_base = agent_cfg.get('model', {}).get(
+                        'name_or_path', 'Qwen/Qwen2.5-0.5B-Instruct'
+                    )
+                # 如果仍然是训练输出路径，使用默认值
+                if agent_base.startswith('./training_outputs') or agent_base.startswith('training_outputs'):
+                    agent_base = 'Qwen/Qwen2.5-0.5B-Instruct'
 
                 ok = await self._run_lora_inference(
                     agent_id=agent_id,
