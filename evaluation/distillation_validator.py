@@ -1166,9 +1166,7 @@ class DistillationValidator:
         # 计算与 chosen 的对齐度（使用 evaluator 的现有方法）
         alignment_scores = []
         for pred, ch in zip(predictions, chosen):
-            # 使用简单的字符串相似度作为对齐度
-            from evaluation.evaluator import SystemEvaluator
-            score = SystemEvaluator._token_f1(pred, ch)
+            score = self.evaluator._compute_token_f1(pred, ch)
             alignment_scores.append(score)
         
         chosen_alignment = sum(alignment_scores) / len(alignment_scores) if alignment_scores else 0
@@ -1176,7 +1174,7 @@ class DistillationValidator:
         # 计算拒绝率：预测与 rejected 的相似度应该低
         rejection_scores = []
         for pred, rej in zip(predictions, rejected):
-            sim = SystemEvaluator._token_f1(pred, rej)
+            sim = self.evaluator._compute_token_f1(pred, rej)
             rejection_scores.append(1 - sim)  # 越低越好，所以取反
         
         rejection_rate = sum(rejection_scores) / len(rejection_scores) if rejection_scores else 0
@@ -1184,8 +1182,8 @@ class DistillationValidator:
         # 偏好准确率：预测更接近 chosen 而非 rejected
         correct_prefs = 0
         for pred, ch, rej in zip(predictions, chosen, rejected):
-            sim_chosen = SystemEvaluator._token_f1(pred, ch)
-            sim_rejected = SystemEvaluator._token_f1(pred, rej)
+            sim_chosen = self.evaluator._compute_token_f1(pred, ch)
+            sim_rejected = self.evaluator._compute_token_f1(pred, rej)
             if sim_chosen > sim_rejected:
                 correct_prefs += 1
         
