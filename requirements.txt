@@ -22,6 +22,7 @@ sqlalchemy>=2.0.0
 torch>=2.0.0
 transformers>=4.35.0
 accelerate>=0.20.0
+peft>=0.6.0
 huggingface-hub>=0.23.2
 
 # 训练框架 (可选，自动检测)

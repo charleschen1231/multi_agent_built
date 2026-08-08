@@ -1837,96 +1837,269 @@ async function deployTrainedModel(jobId, agentId) {
 }
 
 async function validateTrainingJob(jobId) {
-    if (!confirm('确定要验证蒸馏效果吗？\n将比较 student 模型输出与 teacher (GPT-4o) 的 ground truth。')) {
+    if (!confirm('确定要验证蒸馏效果吗？\n将加载模型进行三向对比：基座模型 vs 微调模型 vs 教师GT')) {
         return;
     }
     
+    const content = document.getElementById('training-detail-content');
+    if (content) {
+        content.innerHTML += `
+            <div id="validation-progress" style="margin-top: 20px; padding: 20px; background: #f0f9ff; border: 1px solid #91caff; border-radius: 12px;">
+                <h4 style="color: #0958d9;">⏳ 蒸馏验证中...</h4>
+                <div id="validation-logs" style="font-family: monospace; font-size: 12px; color: #555; max-height: 200px; overflow-y: auto; margin-top: 12px; padding: 8px; background: #fafafa; border-radius: 6px;"></div>
+            </div>
+        `;
+    }
+    
     try {
-        showLoading();
-        const result = await apiRequest(`/api/training/jobs/${jobId}/validate`, {
+        const startResult = await apiRequest(`/api/training/jobs/${jobId}/validate`, {
             method: 'POST',
             body: JSON.stringify({})
         });
         
-        // Render report inline in the detail modal instead of alert
-        const report = result.validation_report;
-        renderValidationReportInline(jobId, report, result);
+        const validationKey = startResult.validation_key;
         
-        // Also update the eval tab
-        loadEvaluableJobs();
+        // Poll for status
+        let completed = false;
+        let attempts = 0;
+        const maxAttempts = 180; // 3 minutes at 1s interval
+        
+        while (!completed && attempts < maxAttempts) {
+            await new Promise(r => setTimeout(r, 1000));
+            attempts++;
+            
+            try {
+                const status = await apiRequest(
+                    `/api/training/jobs/${jobId}/validate/status?validation_key=${validationKey}`
+                );
+                
+                // Update logs
+                const logsDiv = document.getElementById('validation-logs');
+                if (logsDiv && status.logs) {
+                    logsDiv.innerHTML = status.logs.map(l => `<div>${l}</div>`).join('');
+                    logsDiv.scrollTop = logsDiv.scrollHeight;
+                }
+                
+                if (status.status === 'completed' || status.status === 'failed') {
+                    completed = true;
+                    if (status.result) {
+                        renderValidationReportInline(jobId, status.result);
+                    } else if (status.status === 'failed') {
+                        const progressDiv = document.getElementById('validation-progress');
+                        if (progressDiv) {
+                            progressDiv.innerHTML = `
+                                <h4 style="color: #ff4d4f;">❌ 验证失败</h4>
+                                <p style="color: #666;">${status.error || 'Unknown error'}</p>
+                            `;
+                        }
+                    }
+                }
+            } catch (e) {
+                // Polling error, continue
+            }
+        }
+        
+        if (!completed) {
+            const progressDiv = document.getElementById('validation-progress');
+            if (progressDiv) {
+                progressDiv.innerHTML += `<p style="color: #faad14;">⏱️ 验证仍在进行中，请稍后查看结果</p>`;
+            }
+        }
+        
     } catch (error) {
-        alert('验证失败: ' + error.message);
-    } finally {
-        hideLoading();
+        alert('验证启动失败: ' + error.message);
+        const progressDiv = document.getElementById('validation-progress');
+        if (progressDiv) {
+            progressDiv.innerHTML = `<h4 style="color: #ff4d4f;">❌ 验证失败: ${error.message}</h4>`;
+        }
     }
 }
 
-function renderValidationReportInline(jobId, report, result) {
+function renderValidationReportInline(jobId, report) {
     const content = document.getElementById('training-detail-content');
     if (!content) return;
     
+    // Remove progress div
+    const progressDiv = document.getElementById('validation-progress');
+    if (progressDiv) progressDiv.remove();
+    
     const summary = report.summary || {};
-    const score = summary.overall_quality_score || report.overall_quality_score || 0;
+    const agentResults = report.agent_results || {};
+    const phases = report.phases || {};
+    
+    const avgBefore = (summary.avg_before_score || 0) * 100;
+    const avgAfter = (summary.avg_after_score || 0) * 100;
+    const avgImp = (summary.avg_improvement || 0) * 100;
     const grade = summary.quality_grade || '';
-    const agents = report.agent_results || [];
     
     let gradeColor = '#52c41a';
     if (grade.startsWith('C') || grade.startsWith('D')) gradeColor = '#faad14';
     else if (grade.startsWith('F')) gradeColor = '#ff4d4f';
     
+    const impColor = avgImp > 0 ? '#52c41a' : avgImp < 0 ? '#ff4d4f' : '#666';
+    const impSign = avgImp > 0 ? '+' : '';
+    
     let html = `
-        <div style="margin-top: 20px; padding: 20px; background: #f0f9ff; border: 1px solid #91caff; border-radius: 12px;">
-            <h4 style="font-weight: 600; margin-bottom: 16px; color: #0958d9;">📊 蒸馏验证报告</h4>
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px;">
-                <div style="text-align: center; padding: 12px; background: white; border-radius: 8px;">
-                    <div style="font-size: 24px; font-weight: 700; color: ${gradeColor};">${(score * 100).toFixed(1)}%</div>
-                    <div style="font-size: 12px; color: #666;">蒸馏质量分数</div>
+        <div style="margin-top: 20px; padding: 20px; background: linear-gradient(135deg, #f0f9ff 0%, #e6f7ff 100%); border: 1px solid #91caff; border-radius: 12px;">
+            <h4 style="font-weight: 600; margin-bottom: 16px; color: #0958d9;">📊 蒸馏效果三向对比报告</h4>
+            
+            <!-- Phase Status -->
+            <div style="display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;">
+    `;
+    
+    // Phase status badges
+    const phaseNames = {
+        'teacher_gt': '👨‍🏫 教师GT',
+        'student_before': '🔵 基座模型',
+        'student_after': '🟢 微调模型'
+    };
+    for (const [key, label] of Object.entries(phaseNames)) {
+        const phase = phases[key] || {};
+        const statusIcon = phase.status === 'completed' ? '✅' : phase.status === 'failed' ? '❌' : '⏳';
+        const bgColor = phase.status === 'completed' ? '#f6ffed' : phase.status === 'failed' ? '#fff2f0' : '#fffbe6';
+        html += `<span style="padding: 4px 10px; background: ${bgColor}; border-radius: 12px; font-size: 12px;">${statusIcon} ${label}</span>`;
+    }
+    
+    html += `</div>
+            
+            <!-- Overall Summary -->
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
+                <div style="text-align: center; padding: 14px; background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                    <div style="font-size: 22px; font-weight: 700; color: #1890ff;">${avgBefore.toFixed(1)}%</div>
+                    <div style="font-size: 11px; color: #666; margin-top: 4px;">🔵 基座模型得分</div>
                 </div>
-                <div style="text-align: center; padding: 12px; background: white; border-radius: 8px;">
-                    <div style="font-size: 24px; font-weight: 700; color: #1890ff;">${grade}</div>
-                    <div style="font-size: 12px; color: #666;">质量等级</div>
+                <div style="text-align: center; padding: 14px; background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                    <div style="font-size: 22px; font-weight: 700; color: #52c41a;">${avgAfter.toFixed(1)}%</div>
+                    <div style="font-size: 11px; color: #666; margin-top: 4px;">🟢 微调模型得分</div>
                 </div>
-                <div style="text-align: center; padding: 12px; background: white; border-radius: 8px;">
-                    <div style="font-size: 24px; font-weight: 700; color: #722ed1;">${report.agents_evaluated || agents.length}</div>
-                    <div style="font-size: 12px; color: #666;">评估 Agent 数</div>
+                <div style="text-align: center; padding: 14px; background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                    <div style="font-size: 22px; font-weight: 700; color: ${impColor};">${impSign}${avgImp.toFixed(1)}%</div>
+                    <div style="font-size: 11px; color: #666; margin-top: 4px;">📈 提升幅度</div>
+                </div>
+                <div style="text-align: center; padding: 14px; background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                    <div style="font-size: 22px; font-weight: 700; color: ${gradeColor};">${grade}</div>
+                    <div style="font-size: 11px; color: #666; margin-top: 4px;">🏆 质量等级</div>
                 </div>
             </div>
     `;
     
-    agents.forEach(agent => {
-        const m = agent.metrics || {};
-        const em = (m.exact_match_rate || 0) * 100;
-        const f1 = (m.avg_token_f1 || 0) * 100;
-        const rouge = (m.avg_rouge_l || 0) * 100;
-        const quality = (m.distillation_quality_score || 0) * 100;
-        let barColor = quality >= 60 ? '#52c41a' : quality >= 40 ? '#faad14' : '#ff4d4f';
+    // Per-agent comparison
+    const agentIds = Object.keys(agentResults);
+    if (agentIds.length > 0) {
+        html += `<h5 style="font-weight: 600; margin-bottom: 12px; color: #333;">🤖 各 Agent 对比详情</h5>`;
         
-        html += `
-            <div style="padding: 12px; background: white; border-radius: 8px; margin-bottom: 8px;">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                    <span style="font-weight: 600;">🤖 ${agent.agent_id}</span>
-                    <span style="font-weight: 600; color: ${barColor};">${quality.toFixed(1)}%</span>
-                </div>
-                <div style="background: #e5e7eb; border-radius: 4px; height: 6px; margin-bottom: 8px; overflow: hidden;">
-                    <div style="background: ${barColor}; height: 100%; width: ${quality}%;"></div>
-                </div>
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; font-size: 12px;">
-                    <div style="text-align: center;"><b>${em.toFixed(1)}%</b><br><span style="color:#666">EM</span></div>
-                    <div style="text-align: center;"><b>${f1.toFixed(1)}%</b><br><span style="color:#666">F1</span></div>
-                    <div style="text-align: center;"><b>${rouge.toFixed(1)}%</b><br><span style="color:#666">ROUGE-L</span></div>
-                    <div style="text-align: center;"><b>${agent.sample_count || 0}</b><br><span style="color:#666">样本</span></div>
-                </div>
-            </div>
-        `;
-    });
+        for (const agentId of agentIds) {
+            const ar = agentResults[agentId];
+            const imp = ar.improvement || {};
+            const beforeScore = (imp.before_score || 0) * 100;
+            const afterScore = (imp.after_score || 0) * 100;
+            const absImp = (imp.absolute || 0) * 100;
+            const agentImpColor = absImp > 0 ? '#52c41a' : absImp < 0 ? '#ff4d4f' : '#666';
+            const agentImpSign = absImp > 0 ? '+' : '';
+            
+            const beforeMetrics = ar.before ? ar.before.metrics : null;
+            const afterMetrics = ar.after ? ar.after.metrics : null;
+            
+            html += `
+                <div style="padding: 14px; background: white; border-radius: 10px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <span style="font-weight: 700; font-size: 14px;">🤖 ${agentId}</span>
+                        <span style="font-weight: 700; color: ${agentImpColor}; font-size: 14px;">
+                            ${agentImpSign}${absImp.toFixed(1)}%
+                        </span>
+                    </div>
+                    
+                    <!-- Before/After comparison bars -->
+                    <div style="margin-bottom: 10px;">
+                        <div style="display: flex; align-items: center; margin-bottom: 4px;">
+                            <span style="width: 80px; font-size: 11px; color: #666;">🔵 基座模型</span>
+                            <div style="flex: 1; background: #e5e7eb; border-radius: 3px; height: 8px; overflow: hidden;">
+                                <div style="background: #1890ff; height: 100%; width: ${beforeScore}%; transition: width 0.5s;"></div>
+                            </div>
+                            <span style="width: 50px; text-align: right; font-size: 11px; font-weight: 600;">${beforeScore.toFixed(1)}%</span>
+                        </div>
+                        <div style="display: flex; align-items: center;">
+                            <span style="width: 80px; font-size: 11px; color: #666;">🟢 微调模型</span>
+                            <div style="flex: 1; background: #e5e7eb; border-radius: 3px; height: 8px; overflow: hidden;">
+                                <div style="background: #52c41a; height: 100%; width: ${afterScore}%; transition: width 0.5s;"></div>
+                            </div>
+                            <span style="width: 50px; text-align: right; font-size: 11px; font-weight: 600;">${afterScore.toFixed(1)}%</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Metrics grid -->
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">
+            `;
+            
+            // Before metrics
+            if (beforeMetrics) {
+                html += `
+                    <div style="padding: 8px; background: #f0f7ff; border-radius: 6px; font-size: 11px;">
+                        <div style="font-weight: 600; color: #1890ff; margin-bottom: 4px;">🔵 基座模型</div>
+                        <div>EM: ${((beforeMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((beforeMetrics.avg_token_f1||0)*100).toFixed(1)}%</div>
+                        <div>ROUGE-L: ${((beforeMetrics.avg_rouge_l||0)*100).toFixed(1)}%</div>
+                    </div>
+                `;
+            } else {
+                html += `<div style="padding: 8px; background: #f5f5f5; border-radius: 6px; font-size: 11px; color: #999;">🔵 基座模型: 无数据</div>`;
+            }
+            
+            // After metrics
+            if (afterMetrics) {
+                html += `
+                    <div style="padding: 8px; background: #f6ffed; border-radius: 6px; font-size: 11px;">
+                        <div style="font-weight: 600; color: #52c41a; margin-bottom: 4px;">🟢 微调模型</div>
+                        <div>EM: ${((afterMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((afterMetrics.avg_token_f1||0)*100).toFixed(1)}%</div>
+                        <div>ROUGE-L: ${((afterMetrics.avg_rouge_l||0)*100).toFixed(1)}%</div>
+                    </div>
+                `;
+            } else {
+                html += `<div style="padding: 8px; background: #f5f5f5; border-radius: 6px; font-size: 11px; color: #999;">🟢 微调模型: 无数据</div>`;
+            }
+            
+            html += `</div>`;
+            
+            // Sample outputs comparison
+            const teacherSamples = ar.teacher_gt_samples || [];
+            const beforeOutputs = ar.before ? (ar.before.outputs || []) : [];
+            const afterOutputs = ar.after ? (ar.after.outputs || []) : [];
+            
+            if (teacherSamples.length > 0 || beforeOutputs.length > 0 || afterOutputs.length > 0) {
+                html += `
+                    <details style="margin-top: 8px;">
+                        <summary style="cursor: pointer; font-size: 12px; color: #1890ff; font-weight: 500;">📝 查看输出对比示例</summary>
+                        <div style="margin-top: 8px; max-height: 300px; overflow-y: auto;">
+                `;
+                const maxSamples = Math.min(3, teacherSamples.length, Math.max(beforeOutputs.length, afterOutputs.length));
+                for (let i = 0; i < maxSamples; i++) {
+                    html += `
+                        <div style="padding: 8px; background: #fafafa; border-radius: 6px; margin-bottom: 6px; font-size: 11px;">
+                            <div style="font-weight: 600; margin-bottom: 4px;">样本 #${i + 1}</div>
+                            <div style="color: #722ed1;">👨‍🏫 Teacher: ${teacherSamples[i] || '-'}</div>
+                            ${beforeOutputs[i] ? `<div style="color: #1890ff;">🔵 Before: ${beforeOutputs[i]}</div>` : ''}
+                            ${afterOutputs[i] ? `<div style="color: #52c41a;">🟢 After: ${afterOutputs[i]}</div>` : ''}
+                        </div>
+                    `;
+                }
+                html += `</div></details>`;
+            }
+            
+            html += `</div>`;
+        }
+    }
     
-    if (summary.best_agent || summary.worst_agent) {
+    // Best/most improved agents
+    if (summary.best_agent || summary.most_improved_agent) {
         html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px;">';
         if (summary.best_agent) {
-            html += `<div style="padding: 8px; background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 6px; font-size: 13px;">✅ 最佳: <b>${summary.best_agent.agent_id}</b> (${((summary.best_agent.quality_score||0)*100).toFixed(1)}%)</div>`;
+            const bestResult = agentResults[summary.best_agent] || {};
+            const bestScore = ((bestResult.improvement || {}).after_score || 0) * 100;
+            html += `<div style="padding: 8px; background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 6px; font-size: 13px;">🏆 最佳: <b>${summary.best_agent}</b> (${bestScore.toFixed(1)}%)</div>`;
         }
-        if (summary.worst_agent) {
-            html += `<div style="padding: 8px; background: #fff2f0; border: 1px solid #ffccc7; border-radius: 6px; font-size: 13px;">⚠️ 最弱: <b>${summary.worst_agent.agent_id}</b> (${((summary.worst_agent.quality_score||0)*100).toFixed(1)}%)</div>`;
+        if (summary.most_improved_agent) {
+            const impResult = agentResults[summary.most_improved_agent] || {};
+            const impVal = ((impResult.improvement || {}).absolute || 0) * 100;
+            html += `<div style="padding: 8px; background: #e6f7ff; border: 1px solid #91caff; border-radius: 6px; font-size: 13px;">📈 最大提升: <b>${summary.most_improved_agent}</b> (+${impVal.toFixed(1)}%)</div>`;
         }
         html += '</div>';
     }
@@ -2250,136 +2423,191 @@ async function loadEvaluableJobs() {
 }
 
 async function runValidation(jobId) {
+    const content = document.getElementById('eval-report-content');
+    const section = document.getElementById('eval-report-section');
+    if (section) section.style.display = 'block';
+    if (content) {
+        content.innerHTML = `
+            <div id="eval-validation-progress" style="padding: 20px; text-align: center;">
+                <h4 style="color: #0958d9;">⏳ 蒸馏验证中，模型推理可能需要几分钟...</h4>
+                <div id="eval-validation-logs" style="font-family: monospace; font-size: 12px; color: #555; max-height: 200px; overflow-y: auto; margin-top: 12px; padding: 8px; background: #fafafa; border-radius: 6px; text-align: left;"></div>
+            </div>
+        `;
+    }
+    
     try {
-        showLoading();
-        const result = await apiRequest(`/api/training/jobs/${jobId}/validate`, {
+        const startResult = await apiRequest(`/api/training/jobs/${jobId}/validate`, {
             method: 'POST',
             body: JSON.stringify({})
         });
         
-        const report = result.validation_report;
-        renderValidationReport(jobId, report, result);
+        const validationKey = startResult.validation_key;
+        let completed = false;
+        let attempts = 0;
+        const maxAttempts = 300;
+        
+        while (!completed && attempts < maxAttempts) {
+            await new Promise(r => setTimeout(r, 1000));
+            attempts++;
+            
+            try {
+                const status = await apiRequest(
+                    `/api/training/jobs/${jobId}/validate/status?validation_key=${validationKey}`
+                );
+                
+                const logsDiv = document.getElementById('eval-validation-logs');
+                if (logsDiv && status.logs) {
+                    logsDiv.innerHTML = status.logs.map(l => `<div>${l}</div>`).join('');
+                    logsDiv.scrollTop = logsDiv.scrollHeight;
+                }
+                
+                if (status.status === 'completed' || status.status === 'failed') {
+                    completed = true;
+                    if (status.result) {
+                        renderValidationReport(jobId, status.result, status.result);
+                    } else if (status.status === 'failed') {
+                        const progressDiv = document.getElementById('eval-validation-progress');
+                        if (progressDiv) {
+                            progressDiv.innerHTML = `<h4 style="color: #ff4d4f;">❌ 验证失败: ${status.error || 'Unknown'}</h4>`;
+                        }
+                    }
+                }
+            } catch (e) { /* polling error */ }
+        }
+        
+        if (!completed) {
+            const progressDiv = document.getElementById('eval-validation-progress');
+            if (progressDiv) {
+                progressDiv.innerHTML += `<p style="color: #faad14;">⏱️ 验证仍在进行中，请稍后刷新查看</p>`;
+            }
+        }
     } catch (error) {
         alert('验证失败: ' + error.message);
-    } finally {
-        hideLoading();
     }
 }
 
 function renderValidationReport(jobId, report, result) {
     const section = document.getElementById('eval-report-section');
     const content = document.getElementById('eval-report-content');
-    section.style.display = 'block';
+    if (section) section.style.display = 'block';
+    if (!content) return;
     
     const summary = report.summary || {};
-    const score = summary.overall_quality_score || report.overall_quality_score || 0;
-    const grade = summary.quality_grade || '';
-    const agents = report.agent_results || [];
+    const agentResults = report.agent_results || {};
+    const phases = report.phases || {};
     
-    // Grade color
+    const avgBefore = (summary.avg_before_score || 0) * 100;
+    const avgAfter = (summary.avg_after_score || 0) * 100;
+    const avgImp = (summary.avg_improvement || 0) * 100;
+    const grade = summary.quality_grade || '';
+    
     let gradeColor = '#52c41a';
     if (grade.startsWith('C') || grade.startsWith('D')) gradeColor = '#faad14';
     else if (grade.startsWith('F')) gradeColor = '#ff4d4f';
     
+    const impColor = avgImp > 0 ? '#52c41a' : avgImp < 0 ? '#ff4d4f' : '#666';
+    const impSign = avgImp > 0 ? '+' : '';
+    
     let html = `
-        <!-- Overall Score -->
-        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px;">
-            <div style="text-align: center; padding: 20px; background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 8px;">
-                <div style="font-size: 32px; font-weight: 700; color: ${gradeColor};">${(score * 100).toFixed(1)}%</div>
-                <div style="font-size: 13px; color: #666; margin-top: 4px;">蒸馏质量分数</div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
+            <div style="text-align: center; padding: 20px; background: #f0f7ff; border: 1px solid #91caff; border-radius: 8px;">
+                <div style="font-size: 28px; font-weight: 700; color: #1890ff;">${avgBefore.toFixed(1)}%</div>
+                <div style="font-size: 12px; color: #666; margin-top: 4px;">🔵 基座模型</div>
             </div>
-            <div style="text-align: center; padding: 20px; background: #f0f9ff; border: 1px solid #91caff; border-radius: 8px;">
-                <div style="font-size: 32px; font-weight: 700; color: #1890ff;">${grade}</div>
-                <div style="font-size: 13px; color: #666; margin-top: 4px;">质量等级</div>
+            <div style="text-align: center; padding: 20px; background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 8px;">
+                <div style="font-size: 28px; font-weight: 700; color: #52c41a;">${avgAfter.toFixed(1)}%</div>
+                <div style="font-size: 12px; color: #666; margin-top: 4px;">🟢 微调模型</div>
+            </div>
+            <div style="text-align: center; padding: 20px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;">
+                <div style="font-size: 28px; font-weight: 700; color: ${impColor};">${impSign}${avgImp.toFixed(1)}%</div>
+                <div style="font-size: 12px; color: #666; margin-top: 4px;">📈 提升幅度</div>
             </div>
             <div style="text-align: center; padding: 20px; background: #f5f3ff; border: 1px solid #d9d0ff; border-radius: 8px;">
-                <div style="font-size: 32px; font-weight: 700; color: #722ed1;">${report.agents_evaluated || agents.length}</div>
-                <div style="font-size: 13px; color: #666; margin-top: 4px;">评估 Agent 数</div>
+                <div style="font-size: 28px; font-weight: 700; color: ${gradeColor};">${grade}</div>
+                <div style="font-size: 12px; color: #666; margin-top: 4px;">🏆 质量等级</div>
             </div>
         </div>
     `;
     
     // Per-Agent Results
-    if (agents.length > 0) {
-        html += `
-            <h4 style="font-weight: 600; margin-bottom: 12px;">🤖 逐 Agent 对比结果</h4>
-            <div style="display: grid; gap: 12px;">
-        `;
+    const agentIds = Object.keys(agentResults);
+    if (agentIds.length > 0) {
+        html += `<h4 style="font-weight: 600; margin-bottom: 12px;">🤖 各 Agent 三向对比</h4><div style="display: grid; gap: 12px;">`;
         
-        agents.forEach(agent => {
-            const m = agent.metrics || {};
-            const em = (m.exact_match_rate || 0) * 100;
-            const f1 = (m.avg_token_f1 || 0) * 100;
-            const rouge = (m.avg_rouge_l || 0) * 100;
-            const quality = (m.distillation_quality_score || 0) * 100;
-            const samples = agent.sample_count || 0;
+        for (const agentId of agentIds) {
+            const ar = agentResults[agentId];
+            const imp = ar.improvement || {};
+            const beforeScore = (imp.before_score || 0) * 100;
+            const afterScore = (imp.after_score || 0) * 100;
+            const absImp = (imp.absolute || 0) * 100;
+            const agentImpColor = absImp > 0 ? '#52c41a' : absImp < 0 ? '#ff4d4f' : '#666';
             
-            // Bar color
-            let barColor = '#52c41a';
-            if (quality < 60) barColor = '#faad14';
-            if (quality < 40) barColor = '#ff4d4f';
+            const beforeMetrics = ar.before ? ar.before.metrics : null;
+            const afterMetrics = ar.after ? ar.after.metrics : null;
             
             html += `
                 <div style="padding: 16px; border: 1px solid #e5e7eb; border-radius: 8px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                        <span style="font-weight: 600; font-size: 15px;">🤖 ${agent.agent_id}</span>
-                        <span style="font-size: 14px; font-weight: 600; color: ${barColor};">${quality.toFixed(1)}%</span>
+                        <span style="font-weight: 600; font-size: 15px;">🤖 ${agentId}</span>
+                        <span style="font-size: 14px; font-weight: 600; color: ${agentImpColor};">${absImp > 0 ? '+' : ''}${absImp.toFixed(1)}%</span>
                     </div>
-                    <div style="background: #e5e7eb; border-radius: 4px; height: 8px; margin-bottom: 12px; overflow: hidden;">
-                        <div style="background: ${barColor}; height: 100%; width: ${quality}%; transition: width 0.5s;"></div>
+                    <div style="margin-bottom: 10px;">
+                        <div style="display: flex; align-items: center; margin-bottom: 4px;">
+                            <span style="width: 80px; font-size: 11px; color: #666;">🔵 基座</span>
+                            <div style="flex: 1; background: #e5e7eb; border-radius: 3px; height: 8px; overflow: hidden;">
+                                <div style="background: #1890ff; height: 100%; width: ${beforeScore}%;"></div>
+                            </div>
+                            <span style="width: 50px; text-align: right; font-size: 11px; font-weight: 600;">${beforeScore.toFixed(1)}%</span>
+                        </div>
+                        <div style="display: flex; align-items: center;">
+                            <span style="width: 80px; font-size: 11px; color: #666;">🟢 微调</span>
+                            <div style="flex: 1; background: #e5e7eb; border-radius: 3px; height: 8px; overflow: hidden;">
+                                <div style="background: #52c41a; height: 100%; width: ${afterScore}%;"></div>
+                            </div>
+                            <span style="width: 50px; text-align: right; font-size: 11px; font-weight: 600;">${afterScore.toFixed(1)}%</span>
+                        </div>
                     </div>
-                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; font-size: 13px;">
-                        <div style="text-align: center; padding: 8px; background: #f9fafb; border-radius: 4px;">
-                            <div style="font-weight: 600; color: #1890ff;">${em.toFixed(1)}%</div>
-                            <div style="color: #666; font-size: 11px;">Exact Match</div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px;">
+                        <div style="padding: 8px; background: #f0f7ff; border-radius: 6px;">
+                            ${beforeMetrics ? `EM: ${((beforeMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((beforeMetrics.avg_token_f1||0)*100).toFixed(1)}% | R-L: ${((beforeMetrics.avg_rouge_l||0)*100).toFixed(1)}%` : '无数据'}
                         </div>
-                        <div style="text-align: center; padding: 8px; background: #f9fafb; border-radius: 4px;">
-                            <div style="font-weight: 600; color: #722ed1;">${f1.toFixed(1)}%</div>
-                            <div style="color: #666; font-size: 11px;">Token F1</div>
-                        </div>
-                        <div style="text-align: center; padding: 8px; background: #f9fafb; border-radius: 4px;">
-                            <div style="font-weight: 600; color: #52c41a;">${rouge.toFixed(1)}%</div>
-                            <div style="color: #666; font-size: 11px;">ROUGE-L</div>
-                        </div>
-                        <div style="text-align: center; padding: 8px; background: #f9fafb; border-radius: 4px;">
-                            <div style="font-weight: 600;">${samples}</div>
-                            <div style="color: #666; font-size: 11px;">样本数</div>
+                        <div style="padding: 8px; background: #f6ffed; border-radius: 6px;">
+                            ${afterMetrics ? `EM: ${((afterMetrics.exact_match_rate||0)*100).toFixed(1)}% | F1: ${((afterMetrics.avg_token_f1||0)*100).toFixed(1)}% | R-L: ${((afterMetrics.avg_rouge_l||0)*100).toFixed(1)}%` : '无数据'}
                         </div>
                     </div>
                 </div>
             `;
-        });
-        
+        }
         html += '</div>';
     }
     
-    // Best/Worst Agent
-    if (summary.best_agent || summary.worst_agent) {
+    if (summary.best_agent || summary.most_improved_agent) {
         html += `<div style="margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">`;
         if (summary.best_agent) {
+            const bestR = agentResults[summary.best_agent] || {};
+            const bestScore = ((bestR.improvement || {}).after_score || 0) * 100;
             html += `<div style="padding: 12px; background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 8px;">
-                <div style="font-size: 12px; color: #52c41a; font-weight: 600;">✅ 最佳 Agent</div>
-                <div style="font-weight: 600; margin-top: 4px;">${summary.best_agent.agent_id}</div>
-                <div style="font-size: 13px; color: #666;">质量分: ${((summary.best_agent.quality_score || 0) * 100).toFixed(1)}%</div>
+                <div style="font-size: 12px; color: #52c41a; font-weight: 600;">🏆 最佳 Agent</div>
+                <div style="font-weight: 600; margin-top: 4px;">${summary.best_agent}</div>
+                <div style="font-size: 13px; color: #666;">得分: ${bestScore.toFixed(1)}%</div>
             </div>`;
         }
-        if (summary.worst_agent) {
-            html += `<div style="padding: 12px; background: #fff2f0; border: 1px solid #ffccc7; border-radius: 8px;">
-                <div style="font-size: 12px; color: #ff4d4f; font-weight: 600;">⚠️ 最弱 Agent</div>
-                <div style="font-weight: 600; margin-top: 4px;">${summary.worst_agent.agent_id}</div>
-                <div style="font-size: 13px; color: #666;">质量分: ${((summary.worst_agent.quality_score || 0) * 100).toFixed(1)}%</div>
+        if (summary.most_improved_agent) {
+            const impR = agentResults[summary.most_improved_agent] || {};
+            const impVal = ((impR.improvement || {}).absolute || 0) * 100;
+            html += `<div style="padding: 12px; background: #e6f7ff; border: 1px solid #91caff; border-radius: 8px;">
+                <div style="font-size: 12px; color: #1890ff; font-weight: 600;">📈 最大提升</div>
+                <div style="font-weight: 600; margin-top: 4px;">${summary.most_improved_agent}</div>
+                <div style="font-size: 13px; color: #666;">提升: +${impVal.toFixed(1)}%</div>
             </div>`;
         }
         html += '</div>';
     }
     
-    // Report file link
     if (result?.report_file) {
         html += `<div style="margin-top: 16px; font-size: 13px; color: #666;">报告文件: <code>${result.report_file}</code></div>`;
     }
     
     content.innerHTML = html;
-    
-    // Scroll to report
-    section.scrollIntoView({ behavior: 'smooth' });
+    if (section) section.scrollIntoView({ behavior: 'smooth' });
 }

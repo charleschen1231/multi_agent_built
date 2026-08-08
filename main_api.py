@@ -23,9 +23,14 @@ from training.sft_trainer import SFTTrainer
 from training.dpo_trainer import DPOTrainer
 from training.grpo_trainer import GRPOTrainer
 from evaluation.evaluator import SystemEvaluator
+from evaluation.distillation_validator import DistillationValidator
 
+import asyncio
 import threading
 import time
+
+# Async validation status tracking
+_validation_status: Dict[str, Dict[str, Any]] = {}
 
 # JWT Configuration
 SECRET_KEY = "your-secret-key-change-in-production"
@@ -1161,12 +1166,10 @@ async def validate_training_job(
     current_user: str = Depends(verify_token)
 ):
     """
-    Validate a completed training job by comparing student outputs vs teacher ground truth.
+    Validate distillation effect with three-way comparison:
+    Teacher GT vs Base Model (Before) vs LoRA Model (After).
     
-    Phase 3 of the distillation pipeline:
-    - Run student pipeline on same dataset
-    - Compare per-agent outputs against teacher trajectories
-    - Compute metrics: exact match, F1, ROUGE-L, trajectory consistency
+    Runs asynchronously - returns job_id, poll with GET /api/training/jobs/{job_id}/validate/status
     """
     job = db.get_training_job(job_id)
     if not job:
@@ -1184,120 +1187,116 @@ async def validate_training_job(
         if not dataset:
             raise HTTPException(status_code=404, detail="Dataset not found")
         
-        evaluator = SystemEvaluator()
+        validation_key = f"job_{job_id}_{int(time.time())}"
+        _validation_status[validation_key] = {
+            'status': 'running',
+            'job_id': job_id,
+            'started_at': datetime.now().isoformat(),
+            'logs': [],
+            'result': None
+        }
         
-        # Find trajectory files
-        trajectory_file = training_manager._find_trajectory_file(job.config_id, job.dataset_id)
+        # Extract training results from job metrics
+        training_results = []
+        if job.metrics and isinstance(job.metrics, dict):
+            agents_data = job.metrics.get('agents', [])
+            for ad in agents_data:
+                training_results.append({
+                    'agent_id': ad.get('agent_id', ''),
+                    'output_dir': ad.get('output_dir', ''),
+                    'model': ad.get('model', ''),
+                    'status': ad.get('status', '')
+                })
         
-        request_data = request or {}
-        student_file = request_data.get('student_trajectory_file', trajectory_file)
-        teacher_file = request_data.get('teacher_trajectory_file')
-        
-        # If no trajectory file, try to find SFT training output files
-        if not student_file:
-            search_dirs = []
-            # 1. Check job.output_dir (ms-swift training output)
-            if job.output_dir and os.path.exists(job.output_dir):
-                search_dirs.append(job.output_dir)
-            # 2. Check system_sft directory where prepare_all_agents_sft_data saves files
-            system_sft_base = os.path.join('training_outputs', 'sft', 'system_sft')
-            if os.path.exists(system_sft_base):
-                # Find the most recent run directory
-                run_dirs = sorted(
-                    [d for d in os.listdir(system_sft_base) if d.startswith('run_')],
-                    reverse=True
-                )
-                if run_dirs:
-                    search_dirs.append(os.path.join(system_sft_base, run_dirs[0]))
-                # Also search all run subdirectories
-                for run_dir in run_dirs:
-                    search_dirs.append(os.path.join(system_sft_base, run_dir))
-            
-            for search_dir in search_dirs:
-                if os.path.exists(search_dir):
-                    sft_files = sorted(
-                        [f for f in os.listdir(search_dir) if f.endswith('_sft.jsonl')],
-                        reverse=True
-                    )
-                    if sft_files:
-                        student_file = os.path.join(search_dir, sft_files[0])
-                        break
-        
-        if not student_file:
-            raise HTTPException(
-                status_code=400, 
-                detail="No student trajectory file found. Please provide student_trajectory_file."
+        # Run validation in background
+        asyncio.create_task(
+            _run_validation_background(
+                validation_key=validation_key,
+                config_json=config.config_json,
+                dataset_file=dataset.file_path,
+                training_results=training_results
             )
-        
-        if teacher_file:
-            # Evaluate from files
-            report = evaluator.evaluate_from_trajectory_files(
-                student_trajectory_file=student_file,
-                teacher_trajectory_file=teacher_file,
-                config_json=config.config_json
-            )
-        else:
-            # Try to build evaluation from dataset + student outputs
-            # Load dataset as teacher GT
-            teacher_data = []
-            with open(dataset.file_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        sample = json.loads(line)
-                        # Convert dataset sample to trajectory format
-                        for agent in config.config_json:
-                            training = agent.get('training', {})
-                            gt_config = training.get('ground_truth', {})
-                            gt_key = gt_config.get('gt_key')
-                            if gt_key and gt_key in sample:
-                                teacher_data.append({
-                                    'agent_id': agent.get('agent_id'),
-                                    'messages': [{'role': 'assistant', 'content': str(sample[gt_key])}],
-                                    'ground_truth': str(sample[gt_key]),
-                                    'meta': {'sample_id': len(teacher_data)}
-                                })
-            
-            # Load student trajectories
-            student_data = []
-            if student_file and os.path.exists(student_file):
-                with open(student_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            student_data.append(json.loads(line))
-            
-            if not student_data:
-                raise HTTPException(status_code=400, detail="No student trajectory data found")
-            
-            report = evaluator.evaluate_system(
-                student_trajectories=student_data,
-                teacher_trajectories=teacher_data,
-                config_json=config.config_json
-            )
-        
-        # Save report
-        report_file = evaluator.save_report(report, f"validation_job_{job_id}.json")
-        report['report_file'] = report_file
-        
-        # Store validation result in job metrics
-        existing_metrics = job.metrics or {}
-        existing_metrics['validation'] = report
-        db.update_training_job(
-            job_id=job_id,
-            metrics=existing_metrics
         )
         
         return {
             "job_id": job_id,
-            "validation_report": report,
-            "report_file": report_file
+            "validation_key": validation_key,
+            "status": "running",
+            "message": "验证已启动，请使用 validation_key 查询进度"
         }
     
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Validation start failed: {str(e)}")
+
+
+async def _run_validation_background(
+    validation_key: str,
+    config_json: List[Dict],
+    dataset_file: str,
+    training_results: List[Dict]
+):
+    """Background task for validation"""
+    def log_cb(msg):
+        if validation_key in _validation_status:
+            _validation_status[validation_key]['logs'].append(msg)
+            # Keep only last 200 logs
+            if len(_validation_status[validation_key]['logs']) > 200:
+                _validation_status[validation_key]['logs'] = \
+                    _validation_status[validation_key]['logs'][-200:]
+    
+    try:
+        validator = DistillationValidator()
+        result = await validator.validate(
+            config_json=config_json,
+            dataset_file=dataset_file,
+            training_results=training_results,
+            log_callback=log_cb
+        )
+        _validation_status[validation_key]['result'] = result
+        _validation_status[validation_key]['status'] = result.get('status', 'completed')
+        _validation_status[validation_key]['completed_at'] = datetime.now().isoformat()
+    except Exception as e:
+        _validation_status[validation_key]['status'] = 'failed'
+        _validation_status[validation_key]['error'] = str(e)
+
+
+@app.get("/api/training/jobs/{job_id}/validate/status")
+async def get_validation_status(
+    job_id: int,
+    validation_key: Optional[str] = None,
+    current_user: str = Depends(verify_token)
+):
+    """Get validation status and results"""
+    if validation_key and validation_key in _validation_status:
+        vs = _validation_status[validation_key]
+        return {
+            'status': vs['status'],
+            'job_id': vs['job_id'],
+            'logs': vs.get('logs', [])[-50:],  # Last 50 logs
+            'result': vs.get('result'),
+            'started_at': vs.get('started_at'),
+            'completed_at': vs.get('completed_at')
+        }
+    
+    # Find latest validation for this job
+    latest_key = None
+    for k, v in _validation_status.items():
+        if v.get('job_id') == job_id:
+            if latest_key is None or k > latest_key:
+                latest_key = k
+    
+    if latest_key:
+        vs = _validation_status[latest_key]
+        return {
+            'status': vs['status'],
+            'job_id': vs['job_id'],
+            'logs': vs.get('logs', [])[-50:],
+            'result': vs.get('result'),
+            'started_at': vs.get('started_at'),
+            'completed_at': vs.get('completed_at')
+        }
+    
+    raise HTTPException(status_code=404, detail="No validation found for this job")
 
 
 @app.post("/api/training/jobs/{job_id}/prepare-data")
