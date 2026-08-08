@@ -2463,12 +2463,18 @@ async function runValidation(jobId) {
                 
                 if (status.status === 'completed' || status.status === 'failed') {
                     completed = true;
-                    if (status.result) {
+                    if (status.result && status.result.summary) {
                         renderValidationReport(jobId, status.result, status.result);
                     } else if (status.status === 'failed') {
                         const progressDiv = document.getElementById('eval-validation-progress');
                         if (progressDiv) {
                             progressDiv.innerHTML = `<h4 style="color: #ff4d4f;">❌ 验证失败: ${status.error || 'Unknown'}</h4>`;
+                        }
+                    } else {
+                        // completed but no result
+                        const progressDiv = document.getElementById('eval-validation-progress');
+                        if (progressDiv) {
+                            progressDiv.innerHTML = `<h4 style="color: #faad14;">⚠️ 验证完成但无结果数据</h4>`;
                         }
                     }
                 }
