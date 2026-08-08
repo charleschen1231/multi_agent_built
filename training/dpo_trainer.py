@@ -690,7 +690,7 @@ class DPOTrainer:
             cmd = [
                 'swift', 'rlhf',
                 '--model', model_path,
-                '--ref_model', ref_model_path,
+                # Note: --ref_model is NOT allowed with LoRA (ref model is auto-derived from frozen base weights)
                 '--dataset', data_file,
                 '--output_dir', output_dir,
                 '--learning_rate', str(default_params['lr']),
